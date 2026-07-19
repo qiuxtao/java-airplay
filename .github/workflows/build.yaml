@@ -56,19 +56,33 @@ jobs:
           if (!$gstreamerDll) { throw 'The staged GStreamer runtime does not contain its core DLL' }
           $runtimeRoot = $gstreamerDll.Directory.Parent.FullName
           "GSTREAMER_RUNTIME_DIR=$runtimeRoot" | Out-File -FilePath $env:GITHUB_ENV -Append
-      - name: Test and package
+      - name: Test and stage app image
         shell: pwsh
         run: |
           .\gradlew.bat test :player:app:stageGStreamerRuntime --console=plain
           if ($LASTEXITCODE -ne 0) { throw "Gradle test/stage failed with exit code $LASTEXITCODE" }
+      - name: Verify app image
+        shell: pwsh
+        run: |
           $appImage = '.\player\app\build\package\staged-image\AirPlay Receiver\AirPlay Receiver.exe'
           $selfTest = Start-Process -FilePath $appImage -Wait -PassThru -ArgumentList '--self-test'
           if ($selfTest.ExitCode -ne 0) { throw "app-image self-test failed with exit code $($selfTest.ExitCode)" }
+      - name: Build Windows installer
+        shell: pwsh
+        run: |
           .\gradlew.bat :player:app:signWindowsPackage --console=plain
           if ($LASTEXITCODE -ne 0) { throw "Gradle packaging failed with exit code $LASTEXITCODE" }
-          $installer = Get-ChildItem '.\player\app\build\package\installer\*.exe' | Select-Object -First 1
+      - name: Install Windows package
+        shell: pwsh
+        run: |
+          $installers = @(Get-ChildItem '.\player\app\build\package\installer\*.exe')
+          if ($installers.Count -ne 1) { throw "Expected one Windows installer, found $($installers.Count)" }
+          $installer = $installers[0]
           $install = Start-Process -FilePath $installer.FullName -Wait -PassThru -ArgumentList '/quiet','/norestart'
           if ($install.ExitCode -ne 0) { throw "Installer smoke test failed with exit code $($install.ExitCode)" }
+      - name: Verify installed application
+        shell: pwsh
+        run: |
           $installedApp = Join-Path $env:LOCALAPPDATA 'AirPlay Receiver\AirPlay Receiver.exe'
           if (!(Test-Path $installedApp)) { throw "Installed application not found at $installedApp" }
           $installedSelfTest = Start-Process -FilePath $installedApp -Wait -PassThru -ArgumentList '--self-test'
