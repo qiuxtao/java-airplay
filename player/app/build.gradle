@@ -30,6 +30,7 @@ jar {
 
 def packageInput = layout.buildDirectory.dir('package/input')
 def packageImage = layout.buildDirectory.dir('package/image')
+def packageStagedImage = layout.buildDirectory.dir('package/staged-image')
 def packageInstaller = layout.buildDirectory.dir('package/installer')
 def isWindows = System.getProperty('os.name').toLowerCase(Locale.ROOT).contains('windows')
 
@@ -45,6 +46,10 @@ tasks.register('preparePackageInput', Sync) {
 tasks.register('packageAppImage', Exec) {
     dependsOn tasks.named('preparePackageInput')
     onlyIf { isWindows }
+    inputs.dir packageInput
+    inputs.property 'appVersion', project.version.toString()
+    inputs.property 'mainClass', application.mainClass
+    outputs.dir packageImage
     doFirst {
         delete packageImage
         def jpackage = javaToolchains.launcherFor {
@@ -69,18 +74,24 @@ tasks.register('stageGStreamerRuntime', Sync) {
     dependsOn tasks.named('packageAppImage')
     onlyIf { isWindows }
     def runtimeDirectory = providers.environmentVariable('GSTREAMER_RUNTIME_DIR')
-    from runtimeDirectory
+    into packageStagedImage
+    from(packageImage)
+    from(runtimeDirectory) {
+        into 'AirPlay Receiver/gstreamer'
+    }
     doFirst {
         if (!runtimeDirectory.isPresent()) {
             throw new GradleException('GSTREAMER_RUNTIME_DIR must point to the GStreamer 1.28.5 MSVC x86_64 runtime')
         }
     }
-    into packageImage.map { it.dir('AirPlay Receiver/gstreamer') }
 }
 
 tasks.register('packageWindows', Exec) {
     dependsOn tasks.named('stageGStreamerRuntime')
     onlyIf { isWindows }
+    inputs.dir packageStagedImage
+    inputs.property 'appVersion', project.version.toString()
+    outputs.dir packageInstaller
     doFirst {
         delete packageInstaller
         def jpackage = javaToolchains.launcherFor {
@@ -90,7 +101,7 @@ tasks.register('packageWindows', Exec) {
                 '--type', 'exe',
                 '--name', 'AirPlay Receiver',
                 '--dest', packageInstaller.get().asFile,
-                '--app-image', packageImage.get().dir('AirPlay Receiver').asFile,
+                '--app-image', packageStagedImage.get().dir('AirPlay Receiver').asFile,
                 '--app-version', project.version.toString(),
                 '--vendor', 'java-airplay',
                 '--win-per-user-install',

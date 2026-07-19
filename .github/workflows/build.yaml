@@ -60,16 +60,19 @@ jobs:
         shell: pwsh
         run: |
           .\gradlew.bat test :player:app:stageGStreamerRuntime --console=plain
-          & '.\player\app\build\package\image\AirPlay Receiver\AirPlay Receiver.exe' --self-test
-          if ($LASTEXITCODE -ne 0) { throw "app-image self-test failed with exit code $LASTEXITCODE" }
+          if ($LASTEXITCODE -ne 0) { throw "Gradle test/stage failed with exit code $LASTEXITCODE" }
+          $appImage = '.\player\app\build\package\staged-image\AirPlay Receiver\AirPlay Receiver.exe'
+          $selfTest = Start-Process -FilePath $appImage -Wait -PassThru -ArgumentList '--self-test'
+          if ($selfTest.ExitCode -ne 0) { throw "app-image self-test failed with exit code $($selfTest.ExitCode)" }
           .\gradlew.bat :player:app:signWindowsPackage --console=plain
+          if ($LASTEXITCODE -ne 0) { throw "Gradle packaging failed with exit code $LASTEXITCODE" }
           $installer = Get-ChildItem '.\player\app\build\package\installer\*.exe' | Select-Object -First 1
           $install = Start-Process -FilePath $installer.FullName -Wait -PassThru -ArgumentList '/quiet','/norestart'
           if ($install.ExitCode -ne 0) { throw "Installer smoke test failed with exit code $($install.ExitCode)" }
           $installedApp = Join-Path $env:LOCALAPPDATA 'AirPlay Receiver\AirPlay Receiver.exe'
           if (!(Test-Path $installedApp)) { throw "Installed application not found at $installedApp" }
-          & $installedApp --self-test
-          if ($LASTEXITCODE -ne 0) { throw "Installed self-test failed with exit code $LASTEXITCODE" }
+          $installedSelfTest = Start-Process -FilePath $installedApp -Wait -PassThru -ArgumentList '--self-test'
+          if ($installedSelfTest.ExitCode -ne 0) { throw "Installed self-test failed with exit code $($installedSelfTest.ExitCode)" }
       - uses: actions/upload-artifact@v4
         with:
           name: airplay-receiver-windows-x64
