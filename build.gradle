@@ -1,29 +1,34 @@
 plugins {
-    id 'io.freefair.lombok' version '6.6'
-    id 'com.adarshr.test-logger' version '3.2.0'
+    id 'io.freefair.lombok' version '9.5.0'
+    id 'com.adarshr.test-logger' version '4.0.0'
 }
 
 ext {
-    springBootVersion = '3.0.0'
-    springDepMgmtVersion = '1.1.0'
-    junitVersion = '5.9.1'
-    nettyVersion = '4.1.86.Final'
-    slf4jVersion = '2.0.5'
-    logbackVersion = '1.4.6'
-    jnaVersion = '5.12.1'
-    jmdnsVersion = '3.5.8'
-    plistVersion = '1.26'
+    junitVersion = '5.13.4'
+    nettyVersion = '4.1.136.Final'
+    slf4jVersion = '2.0.18'
+    logbackVersion = '1.5.38'
+    jnaVersion = '5.19.1'
+    jmdnsVersion = '3.6.3'
+    plistVersion = '1.29'
     eddsaVersion = '0.3.0'
     curve25519Version = '0.5.0'
     gstreamerCoreVersion = '1.4.0'
     gstreamerSwingVersion = '0.9.0'
+    flatLafVersion = '3.7.2'
+    jacksonVersion = '2.22.1'
 }
+
+def sharedVersionProperties = [
+        'junitVersion', 'nettyVersion', 'slf4jVersion', 'logbackVersion', 'jnaVersion',
+        'jmdnsVersion', 'plistVersion', 'eddsaVersion', 'curve25519Version',
+        'gstreamerCoreVersion', 'gstreamerSwingVersion', 'flatLafVersion', 'jacksonVersion']
 
 allprojects {
     apply plugin: 'java'
 
-    group 'com.github.serezhka'
-    version '1.0.7'
+    group = 'com.github.serezhka'
+    version = '1.0.7'
 
     repositories {
         mavenCentral()
@@ -31,8 +36,21 @@ allprojects {
 }
 
 subprojects {
+    sharedVersionProperties.each { propertyName ->
+        extensions.extraProperties.set(propertyName, rootProject.ext.get(propertyName))
+    }
     apply plugin: 'io.freefair.lombok'
     apply plugin: 'com.adarshr.test-logger'
+
+    java {
+        toolchain {
+            languageVersion = JavaLanguageVersion.of(21)
+        }
+    }
+
+    dependencyLocking {
+        lockAllConfigurations()
+    }
 
     dependencies {
         implementation "org.slf4j:slf4j-api:$slf4jVersion"
@@ -40,14 +58,23 @@ subprojects {
 
         testImplementation(platform "org.junit:junit-bom:$junitVersion")
         testImplementation 'org.junit.jupiter:junit-jupiter'
+        testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
     }
 
     tasks.named('test') {
         useJUnitPlatform()
     }
+
+    tasks.withType(JavaCompile).configureEach {
+        options.encoding = 'UTF-8'
+    }
+
+    tasks.withType(ProcessResources).configureEach {
+        filteringCharset = 'UTF-8'
+    }
 }
 
 wrapper {
-    gradleVersion = '8.0.2'
+    gradleVersion = '9.6.1'
     distributionType = Wrapper.DistributionType.ALL
 }

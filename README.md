@@ -1,79 +1,95 @@
-# Java AirPlay Server
+# AirPlay Receiver
 
-[![GitHub release](https://img.shields.io/github/v/release/serezhka/java-airplay)](https://github.com/serezhka/java-airplay/releases)
-[![build](https://github.com/serezhka/java-airplay/actions/workflows/build.yaml/badge.svg)](https://github.com/serezhka/java-airplay/actions/workflows/build.yaml)
-![ViewCount](https://views.whatilearened.today/views/github/serezhka/java-airplay.svg)
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](http://opensource.org/licenses/MIT)
+AirPlay Receiver turns a Windows PC into a receiver for iPhone, iPad, and Mac
+screen mirroring with audio. It provides a modern desktop control center,
+system tray operation, light and dark themes, and Chinese/English UI.
 
-This project unites the [java-airplay-lib](https://github.com/serezhka/java-airplay-lib), [java-airplay-server](https://github.com/serezhka/java-airplay-server)
-and [java-airplay-server-examples](https://github.com/serezhka/java-airplay-server-examples) into one.
-It makes development a lot easier when all parts of the code are put together.
+> This is an independent open-source project and is not affiliated with or
+> endorsed by Apple Inc.
 
-😩 Due to lack of free time and other priorities, this project is not actively maintained. 😩
+## Install on Windows
 
-## Demo
+Download the Windows x64 installer from the latest workflow or release and run
+it normally. The installer contains both Java and a private GStreamer runtime;
+users do not need to install either dependency.
 
-* Raspberry pi 4 model B (1280 x 720 @ 24 fps)
+On first launch, allow AirPlay Receiver through Windows Defender Firewall on
+private networks. Keep the PC and Apple device on the same Wi-Fi or Ethernet
+network.
 
-[![RASPBERRY](https://img.youtube.com/vi/uRvgVkLWfSI/hqdefault.jpg)](https://youtu.be/uRvgVkLWfSI)
+## Mirror an Apple device
 
-* Windows laptop (1920 x 1080 @ 30 fps)
+1. Open AirPlay Receiver and wait until its status reads **Ready**.
+2. Open Control Center on the iPhone or iPad and choose **Screen Mirroring**.
+   On macOS, use Control Center → **Screen Mirroring**.
+3. Select the receiver name shown in the application.
 
-[![RASPBERRY](https://img.youtube.com/vi/RT1hVWGJzos/hqdefault.jpg)](https://youtu.be/RT1hVWGJzos)
+The receiver advertises the primary Windows display as its maximum capability,
+then preserves the source device's real aspect ratio and orientation. The
+player includes full screen, volume/mute, always-on-top, and stop controls.
 
-## How to Run
+This release intentionally focuses on live screen mirroring and its audio. It
+does not promise media-URL/HLS casting, recording, screenshots, PIN pairing, or
+screen casting from the PC to another device.
 
-### From sources
+## Settings and troubleshooting
+
+Settings are stored at `%APPDATA%\AirPlay Receiver\settings.json`. Logs are at
+`%LOCALAPPDATA%\AirPlay Receiver\logs`; the log directory can be opened directly
+from the app.
+
+If the receiver does not appear:
+
+- verify both devices are on the same trusted LAN;
+- make sure the receiver status is **Ready**;
+- allow the application on private networks in Windows Defender Firewall;
+- disable Wi-Fi client isolation or guest-network isolation;
+- restart the receiver after changing network adapters.
+
+Closing the window keeps the receiver in the system tray by default. Use the
+tray menu's **Exit** action to stop it completely.
+
+## Build from source
+
+Requirements for normal development:
+
+- JDK 21;
+- Windows, macOS, or Linux for unit tests;
+- GStreamer for launching the desktop application from source.
 
 ```shell
-git clone https://github.com/serezhka/java-airplay
-cd ./java-airplay
-./gradlew bootRun
+./gradlew test
+./gradlew :player:app:run
 ```
 
-### Pre-built app
+On Windows, set `GSTREAMER_1_0_ROOT_MSVC_X86_64` or pass
+`-Dgstreamer.path=C:\path\to\gstreamer\1.0\msvc_x86_64` when running from
+source.
 
-Download the latest release
+To create the Windows installer, install/stage the official GStreamer 1.28.5
+MSVC x86_64 runtime and point `GSTREAMER_RUNTIME_DIR` at its root:
 
-```shell
-java -jar java-airplay-server-{version}.jar
+```powershell
+$env:GSTREAMER_RUNTIME_DIR='C:\path\to\gstreamer'
+.\gradlew.bat :player:app:packageWindows
 ```
 
-## Configuration
+The output is written to `player/app/build/package/installer`.
+Import a signing certificate into the Windows certificate store and set
+`WINDOWS_SIGNING_KEY_USER` to its subject name to sign with `signtool`.
+`WINDOWS_SIGNTOOL` and `WINDOWS_TIMESTAMP_URL` can override their defaults.
+When the signing subject is absent, the build produces an unsigned installer.
 
-Create `application.properties` file in working dir
+## Modules
 
-### Available properties
+- `lib`: AirPlay pairing, FairPlay, and RTSP primitives.
+- `server`: receiver control, audio, video, Bonjour, and session lifecycle.
+- `player:gstreamer`: embedded Swing/GStreamer playback backend.
+- `player:app`: Windows-oriented desktop product.
+- `client`, `player:ffmpeg`, `player:vlc`, and `player:h264-dump`: retained
+  experimental/developer modules; they are not included in the installer.
 
-```properties
-# airplay
-airplay.serverName=srzhka
-airplay.width=1280
-airplay.height=720
-airplay.fps=24
-# player (gstreamer, ffmpeg, vlc, h264-dump)
-player.implementation=gstreamer
-player.menu.enabled=true
-player.gstreamer.swing=true
-```
+## License
 
-## Players
-
-### Gstreamer
-
-Supports both video and audio (alac + aac_eld) streams <br>
-Gstreamer installation is required (see https://github.com/gstreamer-java/gst1-java-core)
-
-### FFmpeg
-
-Supports only video stream because playback of aac_eld audio requires ffmpeg compilation with ```--enable-libfdk-aac```  <br>
-FFmpeg installation is required, ffplay must be on PATH
-
-### VLC
-
-Playback stops after few seconds <br>
-VLC installation is required
-
-### h264-dump
-
-Saves video stream into dump.h264 file
+The project is licensed under the MIT License. See [LICENSE](LICENSE) and
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

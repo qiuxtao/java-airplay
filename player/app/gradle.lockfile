@@ -1,0 +1,45 @@
+# This is a Gradle generated file for dependency locking.
+# Manual edits can break the build and are not advised.
+# This file is expected to be part of source control.
+# To regenerate this file, run: ./gradlew :player:app:dependencies --write-locks
+ch.qos.logback:logback-classic:1.5.38=compileClasspath,runtimeClasspath,testCompileClasspath,testRuntimeClasspath
+ch.qos.logback:logback-core:1.5.38=compileClasspath,runtimeClasspath,testCompileClasspath,testRuntimeClasspath
+com.fasterxml.jackson.core:jackson-annotations:2.22=compileClasspath,runtimeClasspath,testCompileClasspath,testRuntimeClasspath
+com.fasterxml.jackson.core:jackson-core:2.22.1=compileClasspath,runtimeClasspath,testCompileClasspath,testRuntimeClasspath
+com.fasterxml.jackson.core:jackson-databind:2.22.1=compileClasspath,runtimeClasspath,testCompileClasspath,testRuntimeClasspath
+com.fasterxml.jackson:jackson-bom:2.22.1=compileClasspath,runtimeClasspath,testCompileClasspath,testRuntimeClasspath
+com.formdev:flatlaf-extras:3.7.2=compileClasspath,runtimeClasspath,testCompileClasspath,testRuntimeClasspath
+com.formdev:flatlaf:3.7.2=compileClasspath,runtimeClasspath,testCompileClasspath,testRuntimeClasspath
+com.github.weisj:jsvg:2.1.0=runtimeClasspath,testRuntimeClasspath
+com.googlecode.plist:dd-plist:1.29=compileClasspath,runtimeClasspath,testCompileClasspath,testRuntimeClasspath
+io.lindstrom:m3u8-parser:0.30=runtimeClasspath,testRuntimeClasspath
+io.netty:netty-buffer:4.1.136.Final=runtimeClasspath,testRuntimeClasspath
+io.netty:netty-codec-http:4.1.136.Final=runtimeClasspath,testRuntimeClasspath
+io.netty:netty-codec:4.1.136.Final=runtimeClasspath,testRuntimeClasspath
+io.netty:netty-common:4.1.136.Final=runtimeClasspath,testRuntimeClasspath
+io.netty:netty-handler:4.1.136.Final=runtimeClasspath,testRuntimeClasspath
+io.netty:netty-resolver:4.1.136.Final=runtimeClasspath,testRuntimeClasspath
+io.netty:netty-transport-native-unix-common:4.1.136.Final=runtimeClasspath,testRuntimeClasspath
+io.netty:netty-transport:4.1.136.Final=runtimeClasspath,testRuntimeClasspath
+net.bytebuddy:byte-buddy:1.18.3=testCompileClasspath,testRuntimeClasspath
+net.i2p.crypto:eddsa:0.3.0=runtimeClasspath,testRuntimeClasspath
+net.java.dev.jna:jna-platform:5.19.1=compileClasspath,runtimeClasspath,testCompileClasspath,testRuntimeClasspath
+net.java.dev.jna:jna:5.19.1=compileClasspath,runtimeClasspath,testCompileClasspath,testRuntimeClasspath
+org.apiguardian:apiguardian-api:1.1.2=testCompileClasspath
+org.assertj:assertj-core:3.27.7=testCompileClasspath,testRuntimeClasspath
+org.freedesktop.gstreamer:gst1-java-core:1.4.0=runtimeClasspath,testRuntimeClasspath
+org.freedesktop.gstreamer:gst1-java-swing:0.9.0=runtimeClasspath,testRuntimeClasspath
+org.jmdns:jmdns:3.6.3=runtimeClasspath,testRuntimeClasspath
+org.junit.jupiter:junit-jupiter-api:5.13.4=testCompileClasspath,testRuntimeClasspath
+org.junit.jupiter:junit-jupiter-engine:5.13.4=testRuntimeClasspath
+org.junit.jupiter:junit-jupiter-params:5.13.4=testCompileClasspath,testRuntimeClasspath
+org.junit.jupiter:junit-jupiter:5.13.4=testCompileClasspath,testRuntimeClasspath
+org.junit.platform:junit-platform-commons:1.13.4=testCompileClasspath,testRuntimeClasspath
+org.junit.platform:junit-platform-engine:1.13.4=testRuntimeClasspath
+org.junit.platform:junit-platform-launcher:1.13.4=testRuntimeClasspath
+org.junit:junit-bom:5.13.4=testCompileClasspath,testRuntimeClasspath
+org.opentest4j:opentest4j:1.3.0=testCompileClasspath,testRuntimeClasspath
+org.projectlombok:lombok:1.18.44=annotationProcessor,compileClasspath,lombok,testAnnotationProcessor,testCompileClasspath
+org.slf4j:slf4j-api:2.0.18=compileClasspath,runtimeClasspath,testCompileClasspath,testRuntimeClasspath
+org.whispersystems:curve25519-java:0.5.0=runtimeClasspath,testRuntimeClasspath
+empty=

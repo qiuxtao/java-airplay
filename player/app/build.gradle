@@ -1,22 +1,126 @@
 plugins {
-    id 'org.springframework.boot' version "$springBootVersion"
-    id 'io.spring.dependency-management' version "$springDepMgmtVersion"
+    id 'application'
 }
 
 dependencies {
     implementation project(':server')
     implementation project(':player:gstreamer')
-    implementation project(':player:h264-dump')
-    implementation project(':player:vlc')
-    implementation project(':player:ffmpeg')
 
-    implementation 'org.springframework.boot:spring-boot-starter'
+    implementation "com.formdev:flatlaf:$flatLafVersion"
+    implementation "com.formdev:flatlaf-extras:$flatLafVersion"
+    implementation "com.fasterxml.jackson.core:jackson-databind:$jacksonVersion"
+    implementation "net.java.dev.jna:jna:$jnaVersion"
+    implementation "net.java.dev.jna:jna-platform:$jnaVersion"
+    implementation "ch.qos.logback:logback-classic:$logbackVersion"
 
-    implementation 'com.dorkbox:SystemTray:4.1'
-
-    annotationProcessor 'org.springframework.boot:spring-boot-configuration-processor'
+    testImplementation 'org.assertj:assertj-core:3.27.7'
 }
 
-bootJar {
-    archiveBaseName.set('java-airplay-server')
+application {
+    mainClass = 'com.github.serezhka.airplay.app.PlayerApp'
+    applicationName = 'AirPlay Receiver'
+}
+
+jar {
+    archiveBaseName = 'airplay-receiver'
+    manifest {
+        attributes 'Main-Class': application.mainClass.get()
+    }
+}
+
+def packageInput = layout.buildDirectory.dir('package/input')
+def packageImage = layout.buildDirectory.dir('package/image')
+def packageInstaller = layout.buildDirectory.dir('package/installer')
+def isWindows = System.getProperty('os.name').toLowerCase(Locale.ROOT).contains('windows')
+
+tasks.register('preparePackageInput', Sync) {
+    dependsOn jar
+    into packageInput
+    from(tasks.named('jar'))
+    from(configurations.runtimeClasspath)
+    from(rootProject.file('LICENSE'))
+    from(rootProject.file('THIRD_PARTY_NOTICES.md'))
+}
+
+tasks.register('packageAppImage', Exec) {
+    dependsOn tasks.named('preparePackageInput')
+    onlyIf { isWindows }
+    doFirst {
+        delete packageImage
+        def jpackage = javaToolchains.launcherFor {
+            languageVersion = JavaLanguageVersion.of(21)
+        }.get().metadata.installationPath.file('bin/jpackage.exe').asFile
+        commandLine jpackage,
+                '--type', 'app-image',
+                '--name', 'AirPlay Receiver',
+                '--dest', packageImage.get().asFile,
+                '--input', packageInput.get().asFile,
+                '--main-jar', tasks.named('jar').get().archiveFileName.get(),
+                '--main-class', application.mainClass.get(),
+                '--app-version', project.version.toString(),
+                '--vendor', 'java-airplay',
+                '--description', 'Receive AirPlay screen mirroring and audio on Windows',
+                '--add-modules', 'java.base,java.desktop,java.logging,java.management,java.naming,java.prefs,java.sql,java.xml,jdk.crypto.ec,jdk.localedata,jdk.net,jdk.unsupported',
+                '--jlink-options', '--strip-debug --no-header-files --no-man-pages --strip-native-commands --compress=zip-6'
+    }
+}
+
+tasks.register('stageGStreamerRuntime', Sync) {
+    dependsOn tasks.named('packageAppImage')
+    onlyIf { isWindows }
+    def runtimeDirectory = providers.environmentVariable('GSTREAMER_RUNTIME_DIR')
+    from runtimeDirectory
+    doFirst {
+        if (!runtimeDirectory.isPresent()) {
+            throw new GradleException('GSTREAMER_RUNTIME_DIR must point to the GStreamer 1.28.5 MSVC x86_64 runtime')
+        }
+    }
+    into packageImage.map { it.dir('AirPlay Receiver/gstreamer') }
+}
+
+tasks.register('packageWindows', Exec) {
+    dependsOn tasks.named('stageGStreamerRuntime')
+    onlyIf { isWindows }
+    doFirst {
+        delete packageInstaller
+        def jpackage = javaToolchains.launcherFor {
+            languageVersion = JavaLanguageVersion.of(21)
+        }.get().metadata.installationPath.file('bin/jpackage.exe').asFile
+        def arguments = [
+                '--type', 'exe',
+                '--name', 'AirPlay Receiver',
+                '--dest', packageInstaller.get().asFile,
+                '--app-image', packageImage.get().dir('AirPlay Receiver').asFile,
+                '--app-version', project.version.toString(),
+                '--vendor', 'java-airplay',
+                '--win-per-user-install',
+                '--install-dir', 'AirPlay Receiver',
+                '--win-menu',
+                '--win-shortcut',
+                '--license-file', rootProject.file('LICENSE')]
+        commandLine jpackage, arguments
+    }
+}
+
+tasks.register('signWindowsPackage', Exec) {
+    dependsOn tasks.named('packageWindows')
+    def signingUser = providers.environmentVariable('WINDOWS_SIGNING_KEY_USER')
+    onlyIf { isWindows && signingUser.orNull?.trim() }
+    doFirst {
+        def installers = fileTree(packageInstaller).matching { include '*.exe' }.files
+        if (installers.size() != 1) {
+            throw new GradleException("Expected one Windows installer to sign, found ${installers.size()}")
+        }
+        def signTool = providers.environmentVariable('WINDOWS_SIGNTOOL').getOrElse('signtool.exe')
+        def timestampUrl = providers.environmentVariable('WINDOWS_TIMESTAMP_URL')
+                .getOrElse('http://timestamp.digicert.com')
+        commandLine signTool, 'sign', '/a', '/n', signingUser.get().trim(), '/fd', 'SHA256',
+                '/tr', timestampUrl, '/td', 'SHA256', installers.first()
+    }
+}
+
+tasks.register('selfTest', JavaExec) {
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = application.mainClass
+    args '--self-test'
 }

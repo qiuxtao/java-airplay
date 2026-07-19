@@ -1,0 +1,36 @@
+# This is a Gradle generated file for dependency locking.
+# Manual edits can break the build and are not advised.
+# This file is expected to be part of source control.
+# To regenerate this file, run: ./gradlew :player:vlc:dependencies --write-locks
+com.fasterxml.jackson.core:jackson-annotations:2.14.1=compileClasspath
+com.fasterxml.jackson.core:jackson-core:2.14.1=compileClasspath
+com.fasterxml.jackson.core:jackson-databind:2.14.1=compileClasspath
+com.fasterxml.jackson:jackson-bom:2.14.1=compileClasspath
+com.formdev:flatlaf:3.0=compileClasspath
+com.google.code.findbugs:findbugs-annotations:3.0.1=compileClasspath
+com.google.code.findbugs:jsr305:3.0.2=compileClasspath
+com.google.errorprone:error_prone_annotations:2.11.0=compileClasspath
+com.google.guava:failureaccess:1.0.1=compileClasspath
+com.google.guava:guava:31.1-jre=compileClasspath
+com.google.guava:listenablefuture:9999.0-empty-to-avoid-conflict-with-guava=compileClasspath
+com.google.j2objc:j2objc-annotations:1.3=compileClasspath
+com.googlecode.plist:dd-plist:1.29=compileClasspath
+net.java.dev.jna:jna-jpms:5.12.1=compileClasspath
+net.java.dev.jna:jna-platform-jpms:5.12.1=compileClasspath
+net.java.dev.jna:jna-platform:5.19.1=compileClasspath
+net.java.dev.jna:jna:5.19.1=compileClasspath
+net.sf.trove4j:trove4j:3.0.3=compileClasspath
+org.apache.avro:avro:1.11.1=compileClasspath
+org.apache.commons:commons-compress:1.21=compileClasspath
+org.checkerframework:checker-qual:3.12.0=compileClasspath
+org.projectlombok:lombok:1.18.44=annotationProcessor,compileClasspath,lombok
+org.slf4j:slf4j-api:2.0.18=compileClasspath
+org.spf4j.avro:core-schema:1.0.8=compileClasspath
+org.spf4j:avro-logical-types-fork:1.1=compileClasspath
+org.spf4j:spf4j-avro-adapter-fork:8.9.7=compileClasspath
+org.spf4j:spf4j-avro-adapter:8.9.7=compileClasspath
+org.spf4j:spf4j-core:8.9.7=compileClasspath
+org.threeten:threeten-extra:1.5.0=compileClasspath
+uk.co.caprica:vlcj-natives:4.8.1=compileClasspath
+uk.co.caprica:vlcj:4.8.2=compileClasspath
+empty=

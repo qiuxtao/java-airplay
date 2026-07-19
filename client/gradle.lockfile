@@ -1,0 +1,45 @@
+# This is a Gradle generated file for dependency locking.
+# Manual edits can break the build and are not advised.
+# This file is expected to be part of source control.
+# To regenerate this file, run: ./gradlew :client:dependencies --write-locks
+ch.qos.logback:logback-classic:1.5.38=compileClasspath
+ch.qos.logback:logback-core:1.5.38=compileClasspath
+com.googlecode.plist:dd-plist:1.29=compileClasspath
+io.netty:netty-all:4.1.136.Final=compileClasspath
+io.netty:netty-buffer:4.1.136.Final=compileClasspath
+io.netty:netty-codec-dns:4.1.136.Final=compileClasspath
+io.netty:netty-codec-haproxy:4.1.136.Final=compileClasspath
+io.netty:netty-codec-http2:4.1.136.Final=compileClasspath
+io.netty:netty-codec-http:4.1.136.Final=compileClasspath
+io.netty:netty-codec-memcache:4.1.136.Final=compileClasspath
+io.netty:netty-codec-mqtt:4.1.136.Final=compileClasspath
+io.netty:netty-codec-redis:4.1.136.Final=compileClasspath
+io.netty:netty-codec-smtp:4.1.136.Final=compileClasspath
+io.netty:netty-codec-socks:4.1.136.Final=compileClasspath
+io.netty:netty-codec-stomp:4.1.136.Final=compileClasspath
+io.netty:netty-codec-xml:4.1.136.Final=compileClasspath
+io.netty:netty-codec:4.1.136.Final=compileClasspath
+io.netty:netty-common:4.1.136.Final=compileClasspath
+io.netty:netty-handler-proxy:4.1.136.Final=compileClasspath
+io.netty:netty-handler-ssl-ocsp:4.1.136.Final=compileClasspath
+io.netty:netty-handler:4.1.136.Final=compileClasspath
+io.netty:netty-resolver-dns-classes-macos:4.1.136.Final=compileClasspath
+io.netty:netty-resolver-dns:4.1.136.Final=compileClasspath
+io.netty:netty-resolver:4.1.136.Final=compileClasspath
+io.netty:netty-transport-classes-epoll:4.1.136.Final=compileClasspath
+io.netty:netty-transport-classes-kqueue:4.1.136.Final=compileClasspath
+io.netty:netty-transport-native-unix-common:4.1.136.Final=compileClasspath
+io.netty:netty-transport-rxtx:4.1.136.Final=compileClasspath
+io.netty:netty-transport-sctp:4.1.136.Final=compileClasspath
+io.netty:netty-transport-udt:4.1.136.Final=compileClasspath
+io.netty:netty-transport:4.1.136.Final=compileClasspath
+net.i2p.crypto:eddsa:0.3.0=compileClasspath
+net.java.dev.jna:jna-platform:5.19.1=compileClasspath
+net.java.dev.jna:jna:5.19.1=compileClasspath
+org.freedesktop.gstreamer:gst1-java-core:1.4.0=compileClasspath
+org.freedesktop.gstreamer:gst1-java-swing:0.9.0=compileClasspath
+org.jmdns:jmdns:3.6.3=compileClasspath
+org.projectlombok:lombok:1.18.44=annotationProcessor,compileClasspath,lombok
+org.slf4j:slf4j-api:2.0.18=compileClasspath
+org.whispersystems:curve25519-java:0.5.0=compileClasspath
+empty=

@@ -4,138 +4,242 @@ import com.github.serezhka.airplay.lib.AudioStreamInfo;
 import com.github.serezhka.airplay.lib.VideoStreamInfo;
 import com.github.serezhka.airplay.server.AirPlayConsumer;
 import lombok.extern.slf4j.Slf4j;
-import org.freedesktop.gstreamer.*;
+import org.freedesktop.gstreamer.Buffer;
+import org.freedesktop.gstreamer.Bus;
+import org.freedesktop.gstreamer.Caps;
+import org.freedesktop.gstreamer.Element;
+import org.freedesktop.gstreamer.Format;
+import org.freedesktop.gstreamer.Gst;
+import org.freedesktop.gstreamer.Pipeline;
+import org.freedesktop.gstreamer.Pad;
+import org.freedesktop.gstreamer.Structure;
+import org.freedesktop.gstreamer.Version;
+import org.freedesktop.gstreamer.elements.AppSink;
 import org.freedesktop.gstreamer.elements.AppSrc;
-import org.freedesktop.gstreamer.glib.GLib;
+import org.freedesktop.gstreamer.swing.GstVideoComponent;
 
+import javax.swing.JComponent;
+import java.util.Objects;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 @Slf4j
-public abstract class GstPlayer implements AirPlayConsumer {
+public final class GstPlayer implements AirPlayConsumer, AutoCloseable {
 
-    static {
-        GstPlayerUtils.configurePaths();
-        GLib.setEnv("GST_DEBUG", "3", true);
-        Gst.init(Version.of(1, 10), "BasicPipeline");
-    }
-
-    protected final Pipeline h264Pipeline;
+    private final Pipeline videoPipeline;
     private final Pipeline alacPipeline;
     private final Pipeline aacEldPipeline;
+    private final AppSrc videoSource;
+    private final AppSrc alacSource;
+    private final AppSrc aacEldSource;
+    private final Element alacVolume;
+    private final Element aacEldVolume;
+    private final AppSink videoSink;
+    private final Pad videoSinkPad;
+    private final GstVideoComponent videoComponent;
+    private final ScheduledExecutorService formatPoller;
 
-    private final AppSrc h264Src;
-    private final AppSrc alacSrc;
-    private final AppSrc aacEldSrc;
-
-    private Pipeline hlsPipeline;
-
-    private AudioStreamInfo.CompressionType audioCompressionType;
+    private volatile GstPlayerListener listener = new GstPlayerListener() {
+    };
+    private volatile AudioStreamInfo.CompressionType audioCompressionType;
+    private volatile double volume = 1.0;
+    private volatile boolean muted;
+    private volatile int lastWidth;
+    private volatile int lastHeight;
 
     public GstPlayer() {
-        h264Pipeline = createH264Pipeline();
+        GstRuntime.RuntimeCheck runtime = GstRuntime.configure();
+        if (!runtime.available()) {
+            throw new IllegalStateException(String.join(System.lineSeparator(), runtime.problems()));
+        }
+        Gst.init(Version.of(1, 20), "AirPlay Receiver");
 
-        h264Src = (AppSrc) h264Pipeline.getElementByName("h264-src");
-        h264Src.setStreamType(AppSrc.StreamType.STREAM);
-        h264Src.setCaps(Caps.fromString("video/x-h264,colorimetry=bt709,stream-format=(string)byte-stream,alignment=(string)au"));
-        h264Src.set("is-live", true);
-        h264Src.set("format", Format.TIME);
-        h264Src.set("emit-signals", true);
+        videoPipeline = (Pipeline) Gst.parseLaunch(
+                "appsrc name=video-source ! h264parse ! avdec_h264 ! videoconvert " +
+                        "! appsink name=video-sink sync=false max-buffers=2 drop=true");
+        videoSource = (AppSrc) videoPipeline.getElementByName("video-source");
+        configureSource(videoSource,
+                "video/x-h264,colorimetry=bt709,stream-format=(string)byte-stream,alignment=(string)au");
+        videoSink = (AppSink) videoPipeline.getElementByName("video-sink");
+        videoSinkPad = videoSink.getStaticPad("sink");
+        videoComponent = new GstVideoComponent(videoSink);
+        videoComponent.setKeepAspect(true);
 
-        alacPipeline = (Pipeline) Gst.parseLaunch("appsrc name=alac-src ! avdec_alac ! audioconvert ! audioresample ! autoaudiosink sync=false");
+        alacPipeline = (Pipeline) Gst.parseLaunch(
+                "appsrc name=alac-source ! avdec_alac ! audioconvert ! audioresample " +
+                        "! volume name=alac-volume ! autoaudiosink sync=false");
+        alacSource = (AppSrc) alacPipeline.getElementByName("alac-source");
+        configureSource(alacSource,
+                "audio/x-alac,mpegversion=(int)4,channels=(int)2,rate=(int)44100," +
+                        "stream-format=raw,codec_data=(buffer)00000024616c616300000000000001600010280a0e0200ff00000000000000000000ac44");
+        alacVolume = alacPipeline.getElementByName("alac-volume");
 
-        alacSrc = (AppSrc) alacPipeline.getElementByName("alac-src");
-        alacSrc.setStreamType(AppSrc.StreamType.STREAM);
-        alacSrc.setCaps(Caps.fromString("audio/x-alac,mpegversion=(int)4,channels=(int)2,rate=(int)44100,stream-format=raw,codec_data=(buffer)00000024616c616300000000000001600010280a0e0200ff00000000000000000000ac44"));
-        alacSrc.set("is-live", true);
-        alacSrc.set("format", Format.TIME);
-        alacSrc.set("emit-signals", true);
+        aacEldPipeline = (Pipeline) Gst.parseLaunch(
+                "appsrc name=aac-eld-source ! avdec_aac ! audioconvert ! audioresample " +
+                        "! volume name=aac-eld-volume ! autoaudiosink sync=false");
+        aacEldSource = (AppSrc) aacEldPipeline.getElementByName("aac-eld-source");
+        configureSource(aacEldSource,
+                "audio/mpeg,mpegversion=(int)4,channels=(int)2,rate=(int)44100," +
+                        "stream-format=raw,codec_data=(buffer)f8e85000");
+        aacEldVolume = aacEldPipeline.getElementByName("aac-eld-volume");
 
-        aacEldPipeline = (Pipeline) Gst.parseLaunch("appsrc name=aac-eld-src ! avdec_aac ! audioconvert ! audioresample ! autoaudiosink sync=false");
+        attachBusHandlers(videoPipeline);
+        attachBusHandlers(alacPipeline);
+        attachBusHandlers(aacEldPipeline);
+        applyVolume();
 
-        aacEldSrc = (AppSrc) aacEldPipeline.getElementByName("aac-eld-src");
-        aacEldSrc.setStreamType(AppSrc.StreamType.STREAM);
-        aacEldSrc.setCaps(Caps.fromString("audio/mpeg,mpegversion=(int)4,channnels=(int)2,rate=(int)44100,stream-format=raw,codec_data=(buffer)f8e85000"));
-        aacEldSrc.set("is-live", true);
-        aacEldSrc.set("format", Format.TIME);
-        aacEldSrc.set("emit-signals", true);
+        formatPoller = Executors.newSingleThreadScheduledExecutor(runnable -> {
+            Thread thread = new Thread(runnable, "airplay-video-format");
+            thread.setDaemon(true);
+            return thread;
+        });
+        formatPoller.scheduleWithFixedDelay(this::detectVideoFormat, 250, 500, TimeUnit.MILLISECONDS);
     }
 
-    protected abstract Pipeline createH264Pipeline();
+    public JComponent videoComponent() {
+        return videoComponent;
+    }
+
+    public void setListener(GstPlayerListener listener) {
+        this.listener = Objects.requireNonNull(listener);
+    }
+
+    public void setVolume(double volume) {
+        this.volume = normalizeVolume(volume);
+        applyVolume();
+    }
+
+    public double volume() {
+        return volume;
+    }
+
+    public void setMuted(boolean muted) {
+        this.muted = muted;
+        applyVolume();
+    }
+
+    public boolean muted() {
+        return muted;
+    }
 
     @Override
-    public void onVideoFormat(VideoStreamInfo videoStreamInfo) {
-        h264Pipeline.play();
+    public synchronized void onVideoFormat(VideoStreamInfo videoStreamInfo) {
+        videoPipeline.play();
     }
 
     @Override
     public void onVideo(byte[] bytes) {
-        Buffer buf = new Buffer(bytes.length);
-        buf.map(true).put(bytes); // ByteBuffer.wrap(bytes)
-        h264Src.pushBuffer(buf);
+        push(videoSource, bytes);
     }
 
     @Override
-    public void onVideoSrcDisconnect() {
-        h264Pipeline.stop();
+    public synchronized void onVideoSrcDisconnect() {
+        videoPipeline.stop();
+        lastWidth = 0;
+        lastHeight = 0;
     }
 
     @Override
-    public void onAudioFormat(AudioStreamInfo audioStreamInfo) {
-        this.audioCompressionType = audioStreamInfo.getCompressionType();
-        alacPipeline.play();
-        aacEldPipeline.play();
+    public synchronized void onAudioFormat(AudioStreamInfo audioStreamInfo) {
+        audioCompressionType = audioStreamInfo.getCompressionType();
+        if (audioCompressionType == AudioStreamInfo.CompressionType.ALAC) {
+            aacEldPipeline.stop();
+            alacPipeline.play();
+        } else {
+            alacPipeline.stop();
+            aacEldPipeline.play();
+        }
     }
 
     @Override
     public void onAudio(byte[] bytes) {
-        Buffer buf = new Buffer(bytes.length);
-        buf.map(true).put(bytes); // ByteBuffer.wrap(bytes)
-        switch (audioCompressionType) {
-            case ALAC -> alacSrc.pushBuffer(buf);
-            case AAC_ELD -> aacEldSrc.pushBuffer(buf);
+        AudioStreamInfo.CompressionType type = audioCompressionType;
+        if (type == AudioStreamInfo.CompressionType.ALAC) {
+            push(alacSource, bytes);
+        } else if (type == AudioStreamInfo.CompressionType.AAC_ELD) {
+            push(aacEldSource, bytes);
         }
     }
 
     @Override
-    public void onAudioSrcDisconnect() {
+    public synchronized void onAudioSrcDisconnect() {
         alacPipeline.stop();
         aacEldPipeline.stop();
+        audioCompressionType = null;
     }
 
     @Override
     public void onMediaPlaylist(String playlistUri) {
-        hlsPipeline = (Pipeline) Gst.parseLaunch("playbin3 uri=" + playlistUri);
-        hlsPipeline.play();
+        listener.onPlaybackError("Media URL casting is not supported in this release", null);
     }
 
     @Override
-    public void onMediaPlaylistRemove() {
-        if (hlsPipeline != null) {
-            hlsPipeline.stop();
-        }
+    public void close() {
+        formatPoller.shutdownNow();
+        onAudioSrcDisconnect();
+        onVideoSrcDisconnect();
+        videoPipeline.dispose();
+        alacPipeline.dispose();
+        aacEldPipeline.dispose();
+        videoSinkPad.dispose();
     }
 
-    @Override
-    public void onMediaPlaylistPause() {
-        if (hlsPipeline != null && hlsPipeline.isPlaying()) {
-            hlsPipeline.pause();
-        }
+    private void configureSource(AppSrc source, String caps) {
+        source.setStreamType(AppSrc.StreamType.STREAM);
+        source.setCaps(Caps.fromString(caps));
+        source.set("is-live", true);
+        source.set("format", Format.TIME);
+        source.set("emit-signals", true);
     }
 
-    @Override
-    public void onMediaPlaylistResume() {
-        if (hlsPipeline != null && !hlsPipeline.isPlaying()) {
-            hlsPipeline.play();
-        }
+    private void attachBusHandlers(Pipeline pipeline) {
+        pipeline.getBus().connect((Bus.ERROR) (source, code, message) -> {
+            log.error("GStreamer error {} from {}: {}", code, source, message);
+            listener.onPlaybackError(message, null);
+        });
+        pipeline.getBus().connect((Bus.EOS) source -> listener.onEndOfStream());
     }
 
-    @Override
-    public PlaybackInfo playbackInfo() {
-        if (hlsPipeline != null) {
-            return new PlaybackInfo(
-                    hlsPipeline.queryDuration(TimeUnit.SECONDS),
-                    hlsPipeline.queryPosition(TimeUnit.SECONDS));
+    private void applyVolume() {
+        double effective = muted ? 0 : volume;
+        alacVolume.set("volume", effective);
+        aacEldVolume.set("volume", effective);
+    }
+
+    private void push(AppSrc source, byte[] bytes) {
+        Buffer buffer = new Buffer(bytes.length);
+        try {
+            buffer.map(true).put(bytes);
+        } finally {
+            buffer.unmap();
         }
-        return AirPlayConsumer.super.playbackInfo();
+        source.pushBuffer(buffer);
+    }
+
+    static double normalizeVolume(double value) {
+        return Math.max(0, Math.min(1, value));
+    }
+
+    private void detectVideoFormat() {
+        try {
+            if (!videoPipeline.isPlaying() || !videoSinkPad.hasCurrentCaps()) {
+                return;
+            }
+            Caps caps = videoSinkPad.getCurrentCaps();
+            if (caps == null || caps.size() == 0) {
+                return;
+            }
+            Structure format = caps.getStructure(0);
+            int width = format.getInteger("width");
+            int height = format.getInteger("height");
+            if (width > 0 && height > 0 && (width != lastWidth || height != lastHeight)) {
+                lastWidth = width;
+                lastHeight = height;
+                listener.onVideoFormatChanged(width, height);
+            }
+        } catch (RuntimeException error) {
+            log.debug("Video caps are not available yet", error);
+        }
     }
 }

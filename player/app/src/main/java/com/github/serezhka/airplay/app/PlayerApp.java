@@ -1,35 +1,65 @@
 package com.github.serezhka.airplay.app;
 
-import com.github.serezhka.airplay.server.AirPlayServer;
-import jakarta.annotation.PostConstruct;
-import jakarta.annotation.PreDestroy;
-import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.boot.WebApplicationType;
-import org.springframework.boot.autoconfigure.SpringBootApplication;
-import org.springframework.boot.builder.SpringApplicationBuilder;
+import com.github.serezhka.airplay.app.i18n.I18n;
+import com.github.serezhka.airplay.app.settings.AppSettings;
+import com.github.serezhka.airplay.app.settings.SettingsStore;
+import com.github.serezhka.airplay.app.theme.ThemeManager;
+import com.github.serezhka.airplay.app.ui.MainFrame;
+import com.github.serezhka.airplay.player.gstreamer.GstRuntime;
+import org.slf4j.LoggerFactory;
 
-@Slf4j
-@RequiredArgsConstructor
-@SpringBootApplication
-public class PlayerApp {
+import javax.swing.JOptionPane;
+import javax.swing.SwingUtilities;
+import java.nio.file.Files;
+import java.util.Arrays;
 
-    private final AirPlayServer airPlayServer;
+public final class PlayerApp {
 
-    public static void main(String[] args) {
-        new SpringApplicationBuilder(PlayerApp.class)
-                .web(WebApplicationType.NONE)
-                .headless(false)
-                .run(args);
+    private PlayerApp() {
     }
 
-    @PostConstruct
-    private void postConstruct() throws Exception {
-        airPlayServer.start();
+    public static void main(String[] args) throws Exception {
+        Files.createDirectories(AppPaths.logsDirectory());
+        System.setProperty("APP_LOG_DIR", AppPaths.logsDirectory().toString());
+        System.setProperty("apple.awt.application.name", "AirPlay Receiver");
+
+        if (Arrays.asList(args).contains("--self-test")) {
+            runSelfTest();
+            return;
+        }
+
+        SettingsStore settingsStore = new SettingsStore();
+        AppSettings settings = settingsStore.load();
+        ThemeManager themeManager = new ThemeManager(settings.theme());
+        I18n i18n = new I18n(settings.language());
+
+        try {
+            ReceiverController controller = new ReceiverController(settingsStore, settings, themeManager);
+            SwingUtilities.invokeLater(() -> {
+                MainFrame frame = new MainFrame(controller, i18n);
+                controller.attachView(frame);
+                frame.setVisible(true);
+                controller.start();
+            });
+        } catch (RuntimeException | LinkageError error) {
+            LoggerFactory.getLogger(PlayerApp.class).error("Media runtime initialization failed", error);
+            themeManager.close();
+            String details = error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
+            SwingUtilities.invokeAndWait(() -> JOptionPane.showMessageDialog(null,
+                    i18n.text("error.mediaRuntime", details),
+                    "AirPlay Receiver", JOptionPane.ERROR_MESSAGE));
+            System.exit(1);
+        }
     }
 
-    @PreDestroy
-    private void preDestroy() {
-        airPlayServer.stop();
+    private static void runSelfTest() {
+        GstRuntime.RuntimeCheck runtime = GstRuntime.verifyInstallation();
+        if (Runtime.version().feature() < 21) {
+            throw new IllegalStateException("Java 21 or later is required");
+        }
+        if (!runtime.available()) {
+            throw new IllegalStateException(String.join(System.lineSeparator(), runtime.problems()));
+        }
+        System.out.println("AirPlay Receiver self-test passed. GStreamer: " + runtime.root());
     }
 }

@@ -4,6 +4,7 @@ import com.dd.plist.BinaryPropertyListParser;
 import com.dd.plist.NSData;
 import com.dd.plist.NSDictionary;
 import com.github.serezhka.airplay.lib.AudioStreamInfo;
+import com.github.serezhka.airplay.lib.MediaStreamInfo;
 import com.github.serezhka.airplay.lib.VideoStreamInfo;
 import com.github.serezhka.airplay.server.AirPlayConfig;
 import com.github.serezhka.airplay.server.AirPlayConsumer;
@@ -11,7 +12,7 @@ import com.github.serezhka.airplay.server.internal.handler.session.Session;
 import com.github.serezhka.airplay.server.internal.handler.session.SessionManager;
 import com.github.serezhka.airplay.server.internal.handler.util.PropertyListUtil;
 import io.lindstrom.m3u8.model.*;
-import io.lindstrom.m3u8.parser.MasterPlaylistParser;
+import io.lindstrom.m3u8.parser.MultivariantPlaylistParser;
 import io.lindstrom.m3u8.parser.MediaPlaylistParser;
 import io.lindstrom.m3u8.parser.ParsingMode;
 import io.lindstrom.m3u8.parser.PlaylistParserException;
@@ -19,7 +20,7 @@ import io.netty.buffer.ByteBufInputStream;
 import io.netty.buffer.ByteBufOutputStream;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
-import io.netty.channel.ChannelInboundHandlerAdapter;
+import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.channel.socket.ServerSocketChannel;
 import io.netty.handler.codec.http.*;
 import io.netty.handler.codec.rtsp.*;
@@ -27,6 +28,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
 import java.nio.charset.StandardCharsets;
+import java.net.InetSocketAddress;
 import java.util.Base64;
 import java.util.Optional;
 import java.util.regex.Pattern;
@@ -34,14 +36,27 @@ import java.util.stream.Collectors;
 
 @Slf4j
 @RequiredArgsConstructor
-public class ControlHandler extends ChannelInboundHandlerAdapter {
+public class ControlHandler extends SimpleChannelInboundHandler<Object> {
 
     private final SessionManager sessionManager;
     private final AirPlayConfig airPlayConfig;
     private final AirPlayConsumer airPlayConsumer;
 
     @Override
-    public final void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
+    public void channelInactive(ChannelHandlerContext ctx) throws Exception {
+        sessionManager.channelClosed(ctx.channel());
+        super.channelInactive(ctx);
+    }
+
+    @Override
+    public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
+        log.warn("AirPlay control connection failed", cause);
+        sessionManager.notifyError(cause);
+        ctx.close();
+    }
+
+    @Override
+    protected final void channelRead0(ChannelHandlerContext ctx, Object msg) throws Exception {
         if (msg instanceof FullHttpRequest request) {
             if (RtspVersions.RTSP_1_0.equals(request.protocolVersion())) {
                 if (HttpMethod.GET.equals(request.method()) && "/info".equals(request.uri())) {
@@ -123,10 +138,12 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
      * @param request incoming request
      * @return active session
      */
-    private Session resolveSession(FullHttpRequest request) {
+    private Session resolveSession(ChannelHandlerContext ctx, FullHttpRequest request) {
         var sessionId = Optional.ofNullable(request.headers().get("Active-Remote"))
                 .orElseGet(() -> request.headers().get("X-Apple-Session-ID"));
-        return sessionManager.getSession(sessionId);
+        return sessionManager.getSession(sessionId,
+                (InetSocketAddress) ctx.channel().remoteAddress(),
+                ctx.channel());
     }
 
     private void handleGetInfo(ChannelHandlerContext ctx, FullHttpRequest request) throws Exception {
@@ -137,14 +154,14 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
     }
 
     private void handlePairSetup(ChannelHandlerContext ctx, FullHttpRequest request) throws Exception {
-        var session = resolveSession(request);
+        var session = resolveSession(ctx, request);
         var response = createRtspResponse(request);
         session.getAirPlay().pairSetup(new ByteBufOutputStream(response.content()));
         sendResponse(ctx, request, response);
     }
 
     private void handlePairVerify(ChannelHandlerContext ctx, FullHttpRequest request) throws Exception {
-        var session = resolveSession(request);
+        var session = resolveSession(ctx, request);
         var response = createRtspResponse(request);
         session.getAirPlay().pairVerify(new ByteBufInputStream(request.content()),
                 new ByteBufOutputStream(response.content()));
@@ -152,7 +169,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
     }
 
     private void handleFairPlaySetup(ChannelHandlerContext ctx, FullHttpRequest request) throws Exception {
-        var session = resolveSession(request);
+        var session = resolveSession(ctx, request);
         var response = createRtspResponse(request);
         session.getAirPlay().fairPlaySetup(new ByteBufInputStream(request.content()),
                 new ByteBufOutputStream(response.content()));
@@ -165,15 +182,22 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
     }*/
 
     private void handleRtspSetup(ChannelHandlerContext ctx, FullHttpRequest request) throws Exception {
-        var session = resolveSession(request);
+        var session = resolveSession(ctx, request);
         var response = createRtspResponse(request);
         var mediaStreamInfo = session.getAirPlay().rtspSetup(new ByteBufInputStream(request.content()));
         if (mediaStreamInfo.isPresent()) {
+            if (!sessionManager.claim(session)) {
+                response.setStatus(HttpResponseStatus.valueOf(453));
+                sessionManager.disconnectSession(session);
+                sendResponse(ctx, request, response);
+                return;
+            }
             switch (mediaStreamInfo.get().getStreamType()) {
                 case AUDIO -> {
                     airPlayConsumer.onAudioFormat((AudioStreamInfo) mediaStreamInfo.get());
                     session.getAudioServer().start(airPlayConsumer);
                     session.getAudioControlServer().start();
+                    sessionManager.streamStarted(session, MediaStreamInfo.StreamType.AUDIO);
                     var setup = PropertyListUtil.prepareSetupAudioResponse(session.getAudioServer().getPort(),
                             session.getAudioControlServer().getPort());
                     response.content().writeBytes(setup);
@@ -181,6 +205,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
                 case VIDEO -> {
                     airPlayConsumer.onVideoFormat((VideoStreamInfo) mediaStreamInfo.get());
                     session.getVideoServer().start(airPlayConsumer);
+                    sessionManager.streamStarted(session, MediaStreamInfo.StreamType.VIDEO);
                     var setup = PropertyListUtil.prepareSetupVideoResponse(session.getVideoServer().getPort(),
                             ((ServerSocketChannel) ctx.channel().parent()).localAddress().getPort(), 0);
                     response.content().writeBytes(setup);
@@ -223,26 +248,22 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
     }
 
     private void handleRtspTeardown(ChannelHandlerContext ctx, FullHttpRequest request) throws Exception {
-        var session = resolveSession(request);
+        var session = resolveSession(ctx, request);
         var mediaStreamInfo = session.getAirPlay().rtspTeardown(new ByteBufInputStream(request.content()));
         if (mediaStreamInfo.isPresent()) {
             switch (mediaStreamInfo.get().getStreamType()) {
                 case AUDIO -> {
-                    airPlayConsumer.onAudioSrcDisconnect();
                     session.getAudioServer().stop();
                     session.getAudioControlServer().stop();
+                    sessionManager.streamStopped(session, MediaStreamInfo.StreamType.AUDIO);
                 }
                 case VIDEO -> {
-                    airPlayConsumer.onVideoSrcDisconnect();
                     session.getVideoServer().stop();
+                    sessionManager.streamStopped(session, MediaStreamInfo.StreamType.VIDEO);
                 }
             }
         } else {
-            airPlayConsumer.onAudioSrcDisconnect();
-            airPlayConsumer.onVideoSrcDisconnect();
-            session.getAudioServer().stop();
-            session.getAudioControlServer().stop();
-            session.getVideoServer().stop();
+            sessionManager.disconnectSession(session);
         }
         var response = createRtspResponse(request);
         sendResponse(ctx, request, response);
@@ -271,7 +292,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
         ctx.pipeline().remove(RtspDecoder.class);
         ctx.pipeline().remove(RtspEncoder.class);
         ctx.pipeline().addFirst(new HttpClientCodec());
-        var session = resolveSession(request);
+        var session = resolveSession(ctx, request);
         session.getReverseContexts().put(purpose, ctx);
     }
 
@@ -281,7 +302,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
 
         var clientProcName = play.get("clientProcName").toJavaObject(String.class);
         if ("YouTube".equals(clientProcName)) {
-            var session = resolveSession(request);
+            var session = resolveSession(ctx, request);
             var playlistUri = play.get("Content-Location").toJavaObject(String.class);
             var playlistUriLocal = playlistUriToLocal(playlistUri, playlistBaseUrl(ctx), session.getId());
 
@@ -339,7 +360,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
             var fcupResponseURL = params.get("FCUP_Response_URL").toJavaObject(String.class);
             var fcupResponseBase64 = ((NSData) (params.get("FCUP_Response_Data"))).getBase64EncodedData();
             var fcupResponse = new String(Base64.getDecoder().decode(fcupResponseBase64));
-            var session = resolveSession(request);
+            var session = resolveSession(ctx, request);
 
             if (session.getPlaylistRequestContexts().containsKey(fcupResponseURL)) {
                 if (fcupResponseURL.contains("master.m3u8")) {
@@ -418,7 +439,8 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
     private void handleGetPlaylist(ChannelHandlerContext ctx, FullHttpRequest request) {
         var playlistUriRemote = playlistPathToRemote(request.uri());
         var decoder = new QueryStringDecoder(request.uri());
-        var session = sessionManager.getSession(decoder.parameters().get("session").get(0));
+        var session = sessionManager.getSession(decoder.parameters().get("session").get(0),
+                (InetSocketAddress) ctx.channel().remoteAddress(), ctx.channel());
         session.getPlaylistRequestContexts().put(playlistUriRemote, ctx);
         sendEventRequest(session, playlistUriRemote);
     }
@@ -441,10 +463,10 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
     }
 
     private String masterPlaylistToLocalUrls(String masterPlaylist, String baseUrl, String sessionId) throws PlaylistParserException {
-        var parser = new MasterPlaylistParser();
+        var parser = new MultivariantPlaylistParser();
         var playlist = parser.readPlaylist(masterPlaylist);
 
-        playlist = MasterPlaylist.builder().from(playlist)
+        playlist = MultivariantPlaylist.builder().from(playlist)
                 .alternativeRenditions(playlist.alternativeRenditions().stream()
                         .map(rendition -> AlternativeRendition.builder().from(rendition)
                                 .uri(playlistUriToLocal(rendition.uri().get(), baseUrl, sessionId)).build()).toList())

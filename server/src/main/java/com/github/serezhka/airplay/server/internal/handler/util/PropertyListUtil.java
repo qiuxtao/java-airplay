@@ -12,6 +12,9 @@ import java.nio.charset.StandardCharsets;
 @Slf4j
 public class PropertyListUtil {
 
+    private static final long ALL_FEATURES = 130367356919L;
+    private static final long MIRRORING_FEATURES = 130367356800L;
+
     public static byte[] prepareInfoResponse(AirPlayConfig airPlayConfig) throws Exception {
         NSDictionary audioFormat100 = new NSDictionary();
         audioFormat100.put("audioInputFormats", 67108860);
@@ -44,7 +47,7 @@ public class PropertyListUtil {
         display.put("heightPixels", airPlayConfig.getHeight());
         display.put("maxFPS", airPlayConfig.getFps());
         display.put("overscanned", false);
-        display.put("refreshRate", 60);
+        display.put("refreshRate", airPlayConfig.getFps());
         display.put("rotation", false);
         display.put("uuid", "e5f7a68d-7b0f-4305-984b-974f677a150b");
         display.put("width", airPlayConfig.getWidth());
@@ -57,10 +60,10 @@ public class PropertyListUtil {
         response.put("audioFormats", audioFormats);
         response.put("audioLatencies", audioLatencies);
         response.put("displays", displays);
-        response.put("features", 130367356919L);
+        response.put("features", airPlayConfig.isMirrorOnly() ? MIRRORING_FEATURES : ALL_FEATURES);
         response.put("keepAliveSendStatsAsBody", 1);
         response.put("model", "AppleTV3,2");
-        response.put("name", "Apple TV");
+        response.put("name", airPlayConfig.getServerName());
         response.put("pi", "b08f5a79-db29-4384-b456-a4784d9e6055");
         response.put("sourceVersion", "220.68");
         response.put("statusFlags", 68);

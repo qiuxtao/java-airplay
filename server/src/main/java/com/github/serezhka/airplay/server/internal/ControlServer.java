@@ -2,15 +2,15 @@ package com.github.serezhka.airplay.server.internal;
 
 import com.github.serezhka.airplay.server.AirPlayConfig;
 import com.github.serezhka.airplay.server.AirPlayConsumer;
+import com.github.serezhka.airplay.server.AirPlayServerListener;
+import com.github.serezhka.airplay.server.SessionInfo;
 import com.github.serezhka.airplay.server.internal.handler.control.ControlHandler;
 import com.github.serezhka.airplay.server.internal.handler.session.SessionManager;
 import io.netty.bootstrap.ServerBootstrap;
+import io.netty.channel.Channel;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelOption;
 import io.netty.channel.EventLoopGroup;
-import io.netty.channel.epoll.Epoll;
-import io.netty.channel.epoll.EpollEventLoopGroup;
-import io.netty.channel.epoll.EpollServerSocketChannel;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.ServerSocketChannel;
 import io.netty.channel.socket.SocketChannel;
@@ -22,88 +22,107 @@ import io.netty.handler.logging.ByteBufFormat;
 import io.netty.handler.logging.LogLevel;
 import io.netty.handler.logging.LoggingHandler;
 import lombok.Getter;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
 import java.net.InetSocketAddress;
+import java.util.Optional;
+import java.util.concurrent.TimeUnit;
 
 @Slf4j
-@RequiredArgsConstructor
-public class ControlServer implements Runnable {
+public final class ControlServer {
 
-    private final SessionManager sessionManager = new SessionManager();
-
+    private final SessionManager sessionManager;
     private final AirPlayConfig airPlayConfig;
     private final AirPlayConsumer airPlayConsumer;
 
-    private Thread thread;
+    private EventLoopGroup bossGroup;
+    private EventLoopGroup workerGroup;
+    private Channel serverChannel;
 
     @Getter
     private int port;
 
-    public void start() throws InterruptedException {
-        thread = new Thread(this);
-        thread.start();
-        synchronized (this) {
-            wait();
-        }
+    public ControlServer(AirPlayConfig airPlayConfig,
+                         AirPlayConsumer airPlayConsumer,
+                         AirPlayServerListener listener) {
+        this.airPlayConfig = airPlayConfig;
+        this.airPlayConsumer = airPlayConsumer;
+        sessionManager = new SessionManager(airPlayConsumer, listener);
     }
 
-    public void stop() {
-        if (thread != null) {
-            thread.interrupt();
-            thread = null;
+    public synchronized void start() throws InterruptedException {
+        if (serverChannel != null && serverChannel.isOpen()) {
+            return;
         }
-    }
 
-    @Override
-    public void run() {
-        var serverBootstrap = new ServerBootstrap();
-        var bossGroup = eventLoopGroup();
-        var workerGroup = eventLoopGroup();
+        bossGroup = eventLoopGroup();
+        workerGroup = eventLoopGroup();
         try {
-            serverBootstrap
+            serverChannel = new ServerBootstrap()
                     .group(bossGroup, workerGroup)
                     .channel(serverSocketChannelClass())
-                    .localAddress(new InetSocketAddress(0)) // bind random port
+                    .localAddress(new InetSocketAddress(0))
                     .childHandler(new ChannelInitializer<SocketChannel>() {
                         @Override
-                        public void initChannel(final SocketChannel ch) {
-                            ch.pipeline().addLast(
+                        public void initChannel(SocketChannel channel) {
+                            channel.pipeline().addLast(
                                     new RtspDecoder(),
                                     new RtspEncoder(),
                                     new HttpObjectAggregator(64 * 1024),
-                                    new LoggingHandler(LogLevel.INFO, ByteBufFormat.SIMPLE),
+                                    new LoggingHandler(LogLevel.DEBUG, ByteBufFormat.SIMPLE),
                                     new ControlHandler(sessionManager, airPlayConfig, airPlayConsumer));
                         }
                     })
                     .childOption(ChannelOption.TCP_NODELAY, true)
                     .childOption(ChannelOption.SO_REUSEADDR, true)
-                    .childOption(ChannelOption.SO_KEEPALIVE, true);
-            var channelFuture = serverBootstrap.bind().sync();
+                    .childOption(ChannelOption.SO_KEEPALIVE, true)
+                    .bind()
+                    .sync()
+                    .channel();
 
-            log.info("AirPlay control server listening on port: {}",
-                    port = ((InetSocketAddress) channelFuture.channel().localAddress()).getPort());
+            port = ((InetSocketAddress) serverChannel.localAddress()).getPort();
+            log.info("AirPlay control server listening on port: {}", port);
+        } catch (InterruptedException | RuntimeException error) {
+            shutdownGroups();
+            throw error;
+        }
+    }
 
-            synchronized (this) {
-                this.notify();
-            }
+    public synchronized void stop() {
+        sessionManager.closeAll();
+        if (serverChannel != null) {
+            serverChannel.close().syncUninterruptibly();
+            serverChannel = null;
+        }
+        shutdownGroups();
+        port = 0;
+        log.info("AirPlay control server stopped");
+    }
 
-            channelFuture.channel().closeFuture().sync();
-        } catch (InterruptedException e) {
-            throw new RuntimeException(e);
-        } finally {
-            log.info("AirPlay control server stopped");
-            bossGroup.shutdownGracefully();
-            workerGroup.shutdownGracefully();
+    public void disconnectActiveSession() {
+        sessionManager.disconnectActiveSession();
+    }
+
+    public Optional<SessionInfo> activeSession() {
+        return sessionManager.activeSession();
+    }
+
+    private void shutdownGroups() {
+        if (bossGroup != null) {
+            bossGroup.shutdownGracefully(0, 2, TimeUnit.SECONDS).syncUninterruptibly();
+            bossGroup = null;
+        }
+        if (workerGroup != null) {
+            workerGroup.shutdownGracefully(0, 2, TimeUnit.SECONDS).syncUninterruptibly();
+            workerGroup = null;
         }
     }
 
     private EventLoopGroup eventLoopGroup() {
-        return Epoll.isAvailable() ? new EpollEventLoopGroup() : new NioEventLoopGroup();
+        return new NioEventLoopGroup();
     }
 
     private Class<? extends ServerSocketChannel> serverSocketChannelClass() {
-        return Epoll.isAvailable() ? EpollServerSocketChannel.class : NioServerSocketChannel.class;
+        return NioServerSocketChannel.class;
     }
 }

@@ -1,17 +1,77 @@
 name: build
 
-on: [push]
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
 
 jobs:
-  build:
+  test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-java@v3
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
         with:
-          java-version: 17
-          distribution: zulu
-      - uses: gradle/gradle-build-action@v2
+          java-version: '21'
+          distribution: temurin
+      - uses: gradle/actions/setup-gradle@v4
+      - run: ./gradlew test --console=plain
+
+  windows-package:
+    runs-on: windows-2022
+    env:
+      GSTREAMER_VERSION: 1.28.5
+      GSTREAMER_SHA256: 51ee5eaec33008e8409d8cf6f6884457f22aa3bd515f8856f993a3eaab903530
+      WINDOWS_SIGNING_KEY_USER: ${{ secrets.WINDOWS_SIGNING_KEY_USER }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
         with:
-          gradle-version: 7.6
-          arguments: build
+          java-version: '21'
+          distribution: temurin
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Cache GStreamer installer
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}\gstreamer-installer.exe
+          key: gstreamer-msvc-x64-${{ env.GSTREAMER_VERSION }}
+      - name: Download and stage GStreamer
+        shell: pwsh
+        run: |
+          $installer = Join-Path $env:RUNNER_TEMP 'gstreamer-installer.exe'
+          $runtime = Join-Path $env:RUNNER_TEMP 'gstreamer-runtime'
+          if (!(Test-Path $installer)) {
+            Invoke-WebRequest -UseBasicParsing -OutFile $installer "https://gstreamer.freedesktop.org/pkg/windows/$env:GSTREAMER_VERSION/msvc/gstreamer-1.0-msvc-x86_64-$env:GSTREAMER_VERSION.exe"
+          }
+          $hash = (Get-FileHash -Algorithm SHA256 $installer).Hash.ToLowerInvariant()
+          if ($hash -ne $env:GSTREAMER_SHA256) { throw "Unexpected GStreamer checksum: $hash" }
+          $process = Start-Process -FilePath $installer -Wait -PassThru -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/CURRENTUSER',"/DIR=$runtime"
+          if ($process.ExitCode -ne 0) { throw "GStreamer installer failed with exit code $($process.ExitCode)" }
+          $gstreamerDll = Get-ChildItem $runtime -Recurse -Filter 'gstreamer-1.0-0.dll' | Select-Object -First 1
+          if (!$gstreamerDll) {
+            $gstreamerDll = Get-ChildItem $runtime -Recurse -Filter 'libgstreamer-1.0-0.dll' | Select-Object -First 1
+          }
+          if (!$gstreamerDll) { throw 'The staged GStreamer runtime does not contain its core DLL' }
+          $runtimeRoot = $gstreamerDll.Directory.Parent.FullName
+          "GSTREAMER_RUNTIME_DIR=$runtimeRoot" | Out-File -FilePath $env:GITHUB_ENV -Append
+      - name: Test and package
+        shell: pwsh
+        run: |
+          .\gradlew.bat test :player:app:stageGStreamerRuntime --console=plain
+          & '.\player\app\build\package\image\AirPlay Receiver\AirPlay Receiver.exe' --self-test
+          if ($LASTEXITCODE -ne 0) { throw "app-image self-test failed with exit code $LASTEXITCODE" }
+          .\gradlew.bat :player:app:signWindowsPackage --console=plain
+          $installer = Get-ChildItem '.\player\app\build\package\installer\*.exe' | Select-Object -First 1
+          $install = Start-Process -FilePath $installer.FullName -Wait -PassThru -ArgumentList '/quiet','/norestart'
+          if ($install.ExitCode -ne 0) { throw "Installer smoke test failed with exit code $($install.ExitCode)" }
+          $installedApp = Join-Path $env:LOCALAPPDATA 'AirPlay Receiver\AirPlay Receiver.exe'
+          if (!(Test-Path $installedApp)) { throw "Installed application not found at $installedApp" }
+          & $installedApp --self-test
+          if ($LASTEXITCODE -ne 0) { throw "Installed self-test failed with exit code $LASTEXITCODE" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: airplay-receiver-windows-x64
+          path: player/app/build/package/installer/*.exe
+          if-no-files-found: error
