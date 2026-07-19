@@ -109,7 +109,7 @@ tasks.register('packageWindows', Exec) {
                 '--win-menu',
                 '--win-shortcut',
                 '--license-file', rootProject.file('LICENSE')]
-        commandLine jpackage, arguments
+        commandLine([jpackage] + arguments)
     }
 }
 
