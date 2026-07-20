@@ -174,11 +174,9 @@ final class TrayController implements AutoCloseable {
         popupWindow.pack();
         Dimension size = popupWindow.getSize();
         Rectangle usable = usableScreenBounds(screenX, screenY);
-        int x = Math.max(usable.x + 8, Math.min(screenX - size.width + 8,
+        int x = Math.max(usable.x + 8, Math.min(screenX + 8,
                 usable.x + usable.width - size.width - 8));
-        int y = screenY > usable.y + usable.height / 2
-                ? screenY - size.height - 8
-                : screenY + 8;
+        int y = screenY - size.height - 8;
         y = Math.max(usable.y + 8, Math.min(y, usable.y + usable.height - size.height - 8));
         popupWindow.setLocation(x, y);
         try {

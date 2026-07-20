@@ -1,5 +1,6 @@
 package com.github.serezhka.airplay.app.ui;
 
+import com.formdev.flatlaf.FlatClientProperties;
 import com.formdev.flatlaf.extras.FlatSVGIcon;
 import com.github.serezhka.airplay.app.ReceiverController;
 import com.github.serezhka.airplay.app.i18n.I18n;
@@ -9,13 +10,11 @@ import com.github.serezhka.airplay.server.SessionInfo;
 import javax.swing.AbstractAction;
 import javax.swing.BorderFactory;
 import javax.swing.Box;
-import javax.swing.BoxLayout;
 import javax.swing.JButton;
-import javax.swing.JCheckBox;
 import javax.swing.JComponent;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
-import javax.swing.OverlayLayout;
+import javax.swing.JMenuBar;
 import javax.swing.JPanel;
 import javax.swing.JRootPane;
 import javax.swing.JSlider;
@@ -31,61 +30,64 @@ import java.awt.GraphicsConfiguration;
 import java.awt.GraphicsDevice;
 import java.awt.Rectangle;
 import java.awt.event.ActionEvent;
-import java.awt.event.MouseAdapter;
-import java.awt.event.MouseEvent;
+import java.awt.event.ComponentAdapter;
+import java.awt.event.ComponentEvent;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 
 /** A dedicated, reusable window for the active mirroring session. */
 final class PlaybackWindow extends JFrame {
 
-    private static final Dimension MINIMUM_WINDOW_SIZE = new Dimension(720, 460);
+    private static final Dimension FALLBACK_MINIMUM_SIZE = new Dimension(640, 400);
+    private static final int MINIMUM_PORTRAIT_WIDTH = 420;
+    private static final int MINIMUM_LANDSCAPE_HEIGHT = 360;
 
     private final ReceiverController controller;
     private final I18n i18n;
     private final JPanel player = new JPanel(new BorderLayout());
-    private final JPanel controlOverlay = new JPanel(new BorderLayout());
-    private final JPanel controls = new JPanel();
-    private final JPanel sessionPanel = new JPanel();
-    private final JPanel actionsPanel = new JPanel();
-    private final JLabel sessionLabel = new JLabel();
+    private final JMenuBar titleControls = new JMenuBar();
+    private final JLabel sessionLabel = new JLabel(new FlatSVGIcon("icons/app.svg", 20, 20));
     private final JLabel formatLabel = new JLabel("—");
-    private final JButton fullScreenButton = iconButton("icons/fullscreen.svg", 18);
-    private final JToggleButton muteButton = new JToggleButton(new FlatSVGIcon("icons/volume.svg", 18, 18));
-    private final JCheckBox alwaysOnTop = new JCheckBox();
-    private final JButton stopButton = new JButton(new FlatSVGIcon("icons/stop.svg", 16, 16));
+    private final JButton fullScreenButton = iconButton("icons/fullscreen.svg", 17);
+    private final JToggleButton muteButton = toggleButton("icons/volume.svg", 17);
+    private final JToggleButton alwaysOnTopButton = toggleButton("icons/pin.svg", 17);
     private final JSlider volume;
-    private final Timer hideControlsTimer;
+    private final Timer aspectTimer;
+
     private boolean activeSession;
+    private boolean disconnectRequested;
     private boolean fullScreen;
-    private boolean portraitControls;
+    private boolean adjustingAspect;
     private Rectangle windowedBounds;
     private String sessionAddress;
+    private int sourceWidth;
+    private int sourceHeight;
+    private Dimension lastAcceptedVideoSize;
 
     PlaybackWindow(ReceiverController controller, I18n i18n) {
         super("AirPlay Receiver");
         this.controller = controller;
         this.i18n = i18n;
         this.volume = new JSlider(0, 100, (int) Math.round(controller.settings().volume() * 100));
+        this.aspectTimer = new Timer(12, event -> enforceAspectRatio());
+        aspectTimer.setRepeats(false);
+
         setDefaultCloseOperation(DO_NOTHING_ON_CLOSE);
-        setMinimumSize(MINIMUM_WINDOW_SIZE);
+        setMinimumSize(FALLBACK_MINIMUM_SIZE);
         setSize(980, 640);
         buildUi();
-        hideControlsTimer = new Timer(3000, event -> controls.setVisible(false));
-        hideControlsTimer.setRepeats(false);
         installBehavior();
         refreshTexts();
     }
 
     void showSession(SessionInfo session, AppSettings settings) {
         activeSession = true;
-        stopButton.setEnabled(true);
+        disconnectRequested = false;
         sessionAddress = session.remoteAddress() == null
                 ? i18n.text("player.unknownDevice")
                 : session.remoteAddress().getAddress().getHostAddress();
-        sessionLabel.setText(i18n.text("player.device", sessionAddress));
+        sessionLabel.setToolTipText(i18n.text("player.device", sessionAddress));
         setTitle(i18n.text("player.windowTitle"));
-        showControls();
         if (!isVisible()) {
             setAutoRequestFocus(settings.bringToFront());
             setLocationRelativeTo(null);
@@ -101,21 +103,28 @@ final class PlaybackWindow extends JFrame {
 
     void endSession() {
         activeSession = false;
+        disconnectRequested = false;
         sessionAddress = null;
+        sourceWidth = 0;
+        sourceHeight = 0;
+        lastAcceptedVideoSize = null;
         formatLabel.setText("—");
-        stopButton.setEnabled(true);
-        hideControlsTimer.stop();
+        aspectTimer.stop();
+        setMinimumSize(FALLBACK_MINIMUM_SIZE);
         if (fullScreen) {
             leaveFullScreen();
         }
-        applyControlLayout(false);
         setVisible(false);
     }
 
     void updateVideoFormat(int width, int height) {
+        if (width <= 0 || height <= 0) {
+            return;
+        }
+        sourceWidth = width;
+        sourceHeight = height;
         formatLabel.setText(width + " × " + height);
-        applyControlLayout(height > width);
-        if (!fullScreen && width > 0 && height > 0) {
+        if (!fullScreen) {
             fitWindowToVideo(width, height);
         }
     }
@@ -123,16 +132,15 @@ final class PlaybackWindow extends JFrame {
     void refreshTexts() {
         setTitle(i18n.text("player.windowTitle"));
         fullScreenButton.setToolTipText(i18n.text("player.fullscreen"));
-        muteButton.setToolTipText(i18n.text("player.mute"));
-        alwaysOnTop.setText(i18n.text("player.alwaysOnTop"));
-        stopButton.setText(i18n.text("player.stop"));
+        muteButton.setToolTipText(i18n.text(controller.muted() ? "player.unmute" : "player.mute"));
+        alwaysOnTopButton.setToolTipText(i18n.text("player.alwaysOnTop"));
         if (sessionAddress != null) {
-            sessionLabel.setText(i18n.text("player.device", sessionAddress));
+            sessionLabel.setToolTipText(i18n.text("player.device", sessionAddress));
         }
     }
 
     void closeWindow() {
-        hideControlsTimer.stop();
+        aspectTimer.stop();
         if (fullScreen) {
             leaveFullScreen();
         }
@@ -140,33 +148,49 @@ final class PlaybackWindow extends JFrame {
     }
 
     private void buildUi() {
-        player.setBackground(Color.BLACK);
-        player.setLayout(new OverlayLayout(player));
+        JRootPane rootPane = getRootPane();
+        rootPane.putClientProperty(FlatClientProperties.TITLE_BAR_SHOW_TITLE, false);
+        rootPane.putClientProperty(FlatClientProperties.TITLE_BAR_SHOW_ICON, false);
+        rootPane.putClientProperty(FlatClientProperties.TITLE_BAR_SHOW_MAXIMIZE, false);
+        rootPane.putClientProperty(FlatClientProperties.TITLE_BAR_HEIGHT, 46);
 
-        controls.setBorder(BorderFactory.createEmptyBorder(10, 16, 10, 12));
-        controls.setBackground(new Color(20, 22, 28));
-        sessionPanel.setOpaque(false);
-        sessionLabel.setForeground(Color.WHITE);
-        sessionLabel.setFont(sessionLabel.getFont().deriveFont(13f));
-        formatLabel.setForeground(new Color(177, 183, 196));
+        titleControls.setBorder(BorderFactory.createEmptyBorder(0, 10, 0, 6));
+        titleControls.putClientProperty(FlatClientProperties.COMPONENT_TITLE_BAR_CAPTION,
+                (java.util.function.Function<java.awt.Point, Boolean>) point -> null);
 
-        actionsPanel.setOpaque(false);
+        JPanel caption = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        caption.setOpaque(false);
+        caption.putClientProperty(FlatClientProperties.COMPONENT_TITLE_BAR_CAPTION, true);
+        sessionLabel.setIconTextGap(7);
+        formatLabel.putClientProperty("FlatLaf.styleClass", "small");
+        caption.add(sessionLabel);
+        caption.add(formatLabel);
+        titleControls.add(caption);
+        titleControls.add(Box.createHorizontalGlue());
+
         fullScreenButton.addActionListener(event -> toggleFullScreen());
-        muteButton.addActionListener(event -> updateMutedState(muteButton.isSelected()));
-        volume.addChangeListener(event -> controller.setVolume(volume.getValue() / 100.0));
-        alwaysOnTop.setForeground(Color.WHITE);
-        alwaysOnTop.addActionListener(event -> setAlwaysOnTop(alwaysOnTop.isSelected()));
-        stopButton.addActionListener(event -> requestDisconnect());
+        titleControls.add(fullScreenButton);
+        titleControls.add(Box.createHorizontalStrut(3));
 
-        controlOverlay.setOpaque(false);
-        controlOverlay.setAlignmentX(0.5f);
-        controlOverlay.setAlignmentY(0.5f);
-        controller.videoComponent().setAlignmentX(0.5f);
-        controller.videoComponent().setAlignmentY(0.5f);
-        player.add(controlOverlay);
-        player.add(controller.videoComponent());
-        applyControlLayout(false);
-        installControlHover(controls);
+        muteButton.addActionListener(event -> updateMutedState(muteButton.isSelected()));
+        titleControls.add(muteButton);
+        titleControls.add(Box.createHorizontalStrut(4));
+
+        volume.setPreferredSize(new Dimension(82, 26));
+        volume.setMaximumSize(new Dimension(96, 26));
+        volume.addChangeListener(event -> controller.setVolume(volume.getValue() / 100.0));
+        titleControls.add(volume);
+        titleControls.add(Box.createHorizontalStrut(4));
+
+        alwaysOnTopButton.addActionListener(event -> {
+            boolean selected = alwaysOnTopButton.isSelected();
+            setAlwaysOnTop(selected);
+        });
+        titleControls.add(alwaysOnTopButton);
+        setJMenuBar(titleControls);
+
+        player.setBackground(Color.BLACK);
+        player.add(controller.videoComponent(), BorderLayout.CENTER);
         setContentPane(player);
     }
 
@@ -182,15 +206,14 @@ final class PlaybackWindow extends JFrame {
             }
         });
 
-        MouseAdapter revealControls = new MouseAdapter() {
+        addComponentListener(new ComponentAdapter() {
             @Override
-            public void mouseMoved(MouseEvent event) {
-                showControls();
+            public void componentResized(ComponentEvent event) {
+                if (!adjustingAspect && sourceWidth > 0 && sourceHeight > 0 && !fullScreen) {
+                    aspectTimer.restart();
+                }
             }
-        };
-        player.addMouseMotionListener(revealControls);
-        controlOverlay.addMouseMotionListener(revealControls);
-        controller.videoComponent().addMouseMotionListener(revealControls);
+        });
 
         JRootPane rootPane = getRootPane();
         rootPane.getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW)
@@ -214,17 +237,17 @@ final class PlaybackWindow extends JFrame {
     }
 
     private void requestDisconnect() {
-        if (!activeSession) {
-            setVisible(false);
+        if (!activeSession || disconnectRequested) {
             return;
         }
-        stopButton.setEnabled(false);
+        disconnectRequested = true;
+        setVisible(false);
         controller.disconnectSession();
     }
 
     private void updateMutedState(boolean muted) {
         controller.setMuted(muted);
-        muteButton.setIcon(new FlatSVGIcon(muted ? "icons/muted.svg" : "icons/volume.svg", 18, 18));
+        muteButton.setIcon(new FlatSVGIcon(muted ? "icons/muted.svg" : "icons/volume.svg", 17, 17));
         muteButton.setToolTipText(i18n.text(muted ? "player.unmute" : "player.mute"));
     }
 
@@ -238,6 +261,7 @@ final class PlaybackWindow extends JFrame {
         GraphicsDevice device = configuration == null ? null : configuration.getDevice();
         if (device != null) {
             fullScreen = true;
+            titleControls.setVisible(false);
             device.setFullScreenWindow(this);
         }
     }
@@ -249,8 +273,14 @@ final class PlaybackWindow extends JFrame {
             device.setFullScreenWindow(null);
         }
         fullScreen = false;
+        titleControls.setVisible(true);
         if (windowedBounds != null) {
-            setBounds(windowedBounds);
+            adjustingAspect = true;
+            try {
+                setBounds(windowedBounds);
+            } finally {
+                adjustingAspect = false;
+            }
         }
     }
 
@@ -260,118 +290,132 @@ final class PlaybackWindow extends JFrame {
             return;
         }
         Rectangle screen = configuration.getBounds();
-        int maximumWidth = Math.min(1180, (int) (screen.width * 0.82));
-        int controlHeight = portraitControls ? 0 : controls.getPreferredSize().height;
-        int maximumVideoHeight = Math.min(760, (int) (screen.height * 0.78) - controlHeight);
-        double scale = Math.min((double) maximumWidth / width, (double) maximumVideoHeight / height);
-        int targetWidth = Math.max(MINIMUM_WINDOW_SIZE.width, (int) Math.round(width * scale));
-        int targetHeight = Math.max(MINIMUM_WINDOW_SIZE.height,
-                (int) Math.round(height * scale) + controlHeight);
-        setSize(Math.min(targetWidth, maximumWidth), Math.min(targetHeight, screen.height - 80));
-        setLocationRelativeTo(null);
+        int chromeWidth = chromeWidth();
+        int chromeHeight = chromeHeight();
+        int availableWidth = Math.min(1280, (int) Math.round(screen.width * 0.82) - chromeWidth);
+        int availableHeight = Math.min(1000, (int) Math.round(screen.height * 0.82) - chromeHeight);
+        double scale = Math.min(1d, Math.min((double) availableWidth / width, (double) availableHeight / height));
+        Dimension target = new Dimension(
+                Math.max(1, (int) Math.round(width * scale)),
+                Math.max(1, (int) Math.round(height * scale)));
+        Dimension minimum = minimumVideoSize(width, height, screen, chromeWidth, chromeHeight);
+        if (target.width < minimum.width || target.height < minimum.height) {
+            target = minimum;
+        }
+        setMinimumSize(frameSizeForVideo(minimum));
+        applyVideoSize(target, true);
     }
 
-    private void applyControlLayout(boolean portrait) {
-        if (portraitControls == portrait && controls.getParent() == controlOverlay) {
+    private void enforceAspectRatio() {
+        if (sourceWidth <= 0 || sourceHeight <= 0 || fullScreen
+                || (getExtendedState() & MAXIMIZED_BOTH) != 0 || adjustingAspect) {
             return;
         }
-        portraitControls = portrait;
-        controlOverlay.removeAll();
-        controls.removeAll();
-        sessionPanel.removeAll();
-        actionsPanel.removeAll();
+        Dimension current = player.getSize();
+        if (current.width <= 0 || current.height <= 0) {
+            return;
+        }
+        if (Math.abs((double) current.width / current.height - (double) sourceWidth / sourceHeight) < 0.002) {
+            lastAcceptedVideoSize = current;
+            return;
+        }
+        Dimension previous = lastAcceptedVideoSize == null ? current : lastAcceptedVideoSize;
+        Dimension constrained = constrainVideoSize(
+                sourceWidth, sourceHeight, current.width, current.height, previous.width, previous.height);
+        applyVideoSize(constrained, false);
+    }
 
-        if (portrait) {
-            controls.setLayout(new BorderLayout(0, 18));
-            controls.setBorder(BorderFactory.createEmptyBorder(18, 15, 16, 15));
-            controls.setPreferredSize(new Dimension(196, 0));
+    private void applyVideoSize(Dimension videoSize, boolean recenter) {
+        adjustingAspect = true;
+        try {
+            setSize(videoSize.width + chromeWidth(), videoSize.height + chromeHeight());
+            lastAcceptedVideoSize = new Dimension(videoSize);
+            if (recenter) {
+                setLocationRelativeTo(null);
+            }
+        } finally {
+            adjustingAspect = false;
+        }
+    }
 
-            sessionPanel.setLayout(new BoxLayout(sessionPanel, BoxLayout.Y_AXIS));
-            sessionLabel.setAlignmentX(LEFT_ALIGNMENT);
-            formatLabel.setAlignmentX(LEFT_ALIGNMENT);
-            sessionPanel.add(sessionLabel);
-            sessionPanel.add(Box.createVerticalStrut(5));
-            sessionPanel.add(formatLabel);
-
-            actionsPanel.setLayout(new BoxLayout(actionsPanel, BoxLayout.Y_AXIS));
-            JPanel compactActions = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
-            compactActions.setOpaque(false);
-            compactActions.setAlignmentX(LEFT_ALIGNMENT);
-            compactActions.add(fullScreenButton);
-            compactActions.add(muteButton);
-            actionsPanel.add(compactActions);
-            actionsPanel.add(Box.createVerticalStrut(14));
-            volume.setOrientation(SwingConstants.HORIZONTAL);
-            volume.setMaximumSize(new Dimension(Integer.MAX_VALUE, 30));
-            volume.setPreferredSize(new Dimension(160, 30));
-            volume.setAlignmentX(LEFT_ALIGNMENT);
-            actionsPanel.add(volume);
-            actionsPanel.add(Box.createVerticalStrut(12));
-            alwaysOnTop.setAlignmentX(LEFT_ALIGNMENT);
-            actionsPanel.add(alwaysOnTop);
-            actionsPanel.add(Box.createVerticalStrut(14));
-            stopButton.setAlignmentX(LEFT_ALIGNMENT);
-            stopButton.setMaximumSize(new Dimension(Integer.MAX_VALUE, 38));
-            actionsPanel.add(stopButton);
-
-            controls.add(sessionPanel, BorderLayout.NORTH);
-            controls.add(actionsPanel, BorderLayout.CENTER);
-            controlOverlay.add(controls, BorderLayout.EAST);
+    private Dimension minimumVideoSize(int width,
+                                       int height,
+                                       Rectangle screen,
+                                       int chromeWidth,
+                                       int chromeHeight) {
+        double aspect = (double) width / height;
+        int maximumWidth = Math.max(280, (int) (screen.width * 0.82) - chromeWidth);
+        int maximumHeight = Math.max(280, (int) (screen.height * 0.82) - chromeHeight);
+        int minimumWidth;
+        int minimumHeight;
+        if (aspect < 1) {
+            minimumWidth = MINIMUM_PORTRAIT_WIDTH;
+            minimumHeight = (int) Math.round(minimumWidth / aspect);
         } else {
-            controls.setLayout(new BorderLayout(12, 0));
-            controls.setBorder(BorderFactory.createEmptyBorder(10, 16, 10, 12));
-            controls.setPreferredSize(null);
-
-            sessionPanel.setLayout(new FlowLayout(FlowLayout.LEFT, 10, 3));
-            sessionPanel.add(sessionLabel);
-            sessionPanel.add(formatLabel);
-
-            actionsPanel.setLayout(new FlowLayout(FlowLayout.RIGHT, 8, 0));
-            actionsPanel.add(fullScreenButton);
-            actionsPanel.add(muteButton);
-            volume.setOrientation(SwingConstants.HORIZONTAL);
-            volume.setMaximumSize(null);
-            volume.setPreferredSize(new Dimension(96, 28));
-            actionsPanel.add(volume);
-            actionsPanel.add(alwaysOnTop);
-            stopButton.setMaximumSize(null);
-            actionsPanel.add(stopButton);
-
-            controls.add(sessionPanel, BorderLayout.CENTER);
-            controls.add(actionsPanel, BorderLayout.EAST);
-            controlOverlay.add(controls, BorderLayout.SOUTH);
+            minimumHeight = MINIMUM_LANDSCAPE_HEIGHT;
+            minimumWidth = (int) Math.round(minimumHeight * aspect);
         }
-        controlOverlay.revalidate();
-        controlOverlay.repaint();
+        if (minimumWidth > maximumWidth || minimumHeight > maximumHeight) {
+            double scale = Math.min((double) maximumWidth / minimumWidth,
+                    (double) maximumHeight / minimumHeight);
+            minimumWidth = Math.max(280, (int) Math.round(minimumWidth * scale));
+            minimumHeight = Math.max(200, (int) Math.round(minimumHeight * scale));
+        }
+        return new Dimension(minimumWidth, minimumHeight);
     }
 
-    private void showControls() {
-        controls.setVisible(true);
-        hideControlsTimer.restart();
+    private Dimension frameSizeForVideo(Dimension videoSize) {
+        return new Dimension(videoSize.width + chromeWidth(), videoSize.height + chromeHeight());
     }
 
-    private void installControlHover(java.awt.Component component) {
-        component.addMouseListener(new MouseAdapter() {
-            @Override
-            public void mouseEntered(MouseEvent event) {
-                hideControlsTimer.stop();
-            }
+    private int chromeWidth() {
+        int measured = getWidth() - player.getWidth();
+        return measured > 0 ? measured : getInsets().left + getInsets().right;
+    }
 
-            @Override
-            public void mouseExited(MouseEvent event) {
-                hideControlsTimer.restart();
-            }
-        });
-        if (component instanceof java.awt.Container container) {
-            for (java.awt.Component child : container.getComponents()) {
-                installControlHover(child);
-            }
+    private int chromeHeight() {
+        int measured = getHeight() - player.getHeight();
+        return measured > 0
+                ? measured
+                : getInsets().top + getInsets().bottom + titleControls.getPreferredSize().height;
+    }
+
+    static Dimension constrainVideoSize(int sourceWidth,
+                                        int sourceHeight,
+                                        int currentWidth,
+                                        int currentHeight,
+                                        int previousWidth,
+                                        int previousHeight) {
+        double aspect = (double) sourceWidth / sourceHeight;
+        double widthChange = Math.abs(currentWidth - previousWidth) / (double) Math.max(1, previousWidth);
+        double heightChange = Math.abs(currentHeight - previousHeight) / (double) Math.max(1, previousHeight);
+        if (widthChange >= heightChange) {
+            return new Dimension(Math.max(1, currentWidth),
+                    Math.max(1, (int) Math.round(currentWidth / aspect)));
         }
+        return new Dimension(Math.max(1, (int) Math.round(currentHeight * aspect)),
+                Math.max(1, currentHeight));
     }
 
     private static JButton iconButton(String icon, int size) {
         JButton button = new JButton(new FlatSVGIcon(icon, size, size));
-        button.setHorizontalAlignment(SwingConstants.CENTER);
+        styleTitleButton(button);
         return button;
+    }
+
+    private static JToggleButton toggleButton(String icon, int size) {
+        JToggleButton button = new JToggleButton(new FlatSVGIcon(icon, size, size));
+        styleTitleButton(button);
+        return button;
+    }
+
+    private static void styleTitleButton(javax.swing.AbstractButton button) {
+        button.setHorizontalAlignment(SwingConstants.CENTER);
+        button.putClientProperty(FlatClientProperties.BUTTON_TYPE,
+                FlatClientProperties.BUTTON_TYPE_TOOLBAR_BUTTON);
+        button.putClientProperty(FlatClientProperties.SQUARE_SIZE, true);
+        button.setPreferredSize(new Dimension(32, 30));
+        button.setMaximumSize(new Dimension(32, 30));
+        button.setFocusable(false);
     }
 }

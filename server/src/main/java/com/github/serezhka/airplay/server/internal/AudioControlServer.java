@@ -2,7 +2,9 @@ package com.github.serezhka.airplay.server.internal;
 
 import com.github.serezhka.airplay.server.internal.handler.audio.AudioControlHandler;
 import io.netty.bootstrap.Bootstrap;
+import io.netty.buffer.UnpooledByteBufAllocator;
 import io.netty.channel.Channel;
+import io.netty.channel.ChannelOption;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
@@ -33,6 +35,7 @@ public final class AudioControlServer {
                     .group(workerGroup)
                     .channel(datagramChannelClass())
                     .localAddress(new InetSocketAddress(0))
+                    .option(ChannelOption.ALLOCATOR, UnpooledByteBufAllocator.DEFAULT)
                     .handler(new ChannelInitializer<DatagramChannel>() {
                         @Override
                         public void initChannel(DatagramChannel channel) {

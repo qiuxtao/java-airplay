@@ -47,6 +47,7 @@ public class AudioHandler extends ChannelInboundHandlerAdapter {
                 airPlay.decryptAudio(audioPacket.getEncodedAudio(), audioPacket.getEncodedAudioSize());
                 dataConsumer.onAudio(Arrays.copyOfRange(audioPacket.getEncodedAudio(), 0, audioPacket.getEncodedAudioSize()));
                 audioPacket.available(false);
+                buffer[curSeqNo % buffer.length] = null;
                 prevSeqNum = curSeqNo;
                 packetsInBuffer--;
                 return true;
