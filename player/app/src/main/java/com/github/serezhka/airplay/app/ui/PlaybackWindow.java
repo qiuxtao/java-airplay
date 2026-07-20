@@ -7,11 +7,8 @@ import com.github.serezhka.airplay.app.i18n.I18n;
 import com.github.serezhka.airplay.app.settings.AppSettings;
 import com.github.serezhka.airplay.server.SessionInfo;
 
-import javax.swing.AbstractAction;
 import javax.swing.BorderFactory;
 import javax.swing.Box;
-import javax.swing.JButton;
-import javax.swing.JComponent;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
 import javax.swing.JMenuBar;
@@ -19,7 +16,6 @@ import javax.swing.JPanel;
 import javax.swing.JRootPane;
 import javax.swing.JSlider;
 import javax.swing.JToggleButton;
-import javax.swing.KeyStroke;
 import javax.swing.SwingConstants;
 import javax.swing.Timer;
 import java.awt.BorderLayout;
@@ -27,9 +23,7 @@ import java.awt.Color;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.GraphicsConfiguration;
-import java.awt.GraphicsDevice;
 import java.awt.Rectangle;
-import java.awt.event.ActionEvent;
 import java.awt.event.ComponentAdapter;
 import java.awt.event.ComponentEvent;
 import java.awt.event.WindowAdapter;
@@ -48,7 +42,6 @@ final class PlaybackWindow extends JFrame {
     private final JMenuBar titleControls = new JMenuBar();
     private final JLabel sessionLabel = new JLabel(new FlatSVGIcon("icons/app.svg", 20, 20));
     private final JLabel formatLabel = new JLabel("—");
-    private final JButton fullScreenButton = iconButton("icons/fullscreen.svg", 17);
     private final JToggleButton muteButton = toggleButton("icons/volume.svg", 17);
     private final JToggleButton alwaysOnTopButton = toggleButton("icons/pin.svg", 17);
     private final JSlider volume;
@@ -56,9 +49,7 @@ final class PlaybackWindow extends JFrame {
 
     private boolean activeSession;
     private boolean disconnectRequested;
-    private boolean fullScreen;
     private boolean adjustingAspect;
-    private Rectangle windowedBounds;
     private String sessionAddress;
     private int sourceWidth;
     private int sourceHeight;
@@ -69,7 +60,7 @@ final class PlaybackWindow extends JFrame {
         this.controller = controller;
         this.i18n = i18n;
         this.volume = new JSlider(0, 100, (int) Math.round(controller.settings().volume() * 100));
-        this.aspectTimer = new Timer(12, event -> enforceAspectRatio());
+        this.aspectTimer = new Timer(180, event -> enforceAspectRatio());
         aspectTimer.setRepeats(false);
 
         setDefaultCloseOperation(DO_NOTHING_ON_CLOSE);
@@ -111,9 +102,6 @@ final class PlaybackWindow extends JFrame {
         formatLabel.setText("—");
         aspectTimer.stop();
         setMinimumSize(FALLBACK_MINIMUM_SIZE);
-        if (fullScreen) {
-            leaveFullScreen();
-        }
         setVisible(false);
     }
 
@@ -124,14 +112,13 @@ final class PlaybackWindow extends JFrame {
         sourceWidth = width;
         sourceHeight = height;
         formatLabel.setText(width + " × " + height);
-        if (!fullScreen) {
+        if ((getExtendedState() & MAXIMIZED_BOTH) == 0) {
             fitWindowToVideo(width, height);
         }
     }
 
     void refreshTexts() {
         setTitle(i18n.text("player.windowTitle"));
-        fullScreenButton.setToolTipText(i18n.text("player.fullscreen"));
         muteButton.setToolTipText(i18n.text(controller.muted() ? "player.unmute" : "player.mute"));
         alwaysOnTopButton.setToolTipText(i18n.text("player.alwaysOnTop"));
         if (sessionAddress != null) {
@@ -141,9 +128,6 @@ final class PlaybackWindow extends JFrame {
 
     void closeWindow() {
         aspectTimer.stop();
-        if (fullScreen) {
-            leaveFullScreen();
-        }
         dispose();
     }
 
@@ -151,7 +135,7 @@ final class PlaybackWindow extends JFrame {
         JRootPane rootPane = getRootPane();
         rootPane.putClientProperty(FlatClientProperties.TITLE_BAR_SHOW_TITLE, false);
         rootPane.putClientProperty(FlatClientProperties.TITLE_BAR_SHOW_ICON, false);
-        rootPane.putClientProperty(FlatClientProperties.TITLE_BAR_SHOW_MAXIMIZE, false);
+        rootPane.putClientProperty(FlatClientProperties.TITLE_BAR_SHOW_MAXIMIZE, true);
         rootPane.putClientProperty(FlatClientProperties.TITLE_BAR_HEIGHT, 46);
 
         titleControls.setBorder(BorderFactory.createEmptyBorder(0, 10, 0, 6));
@@ -167,10 +151,6 @@ final class PlaybackWindow extends JFrame {
         caption.add(formatLabel);
         titleControls.add(caption);
         titleControls.add(Box.createHorizontalGlue());
-
-        fullScreenButton.addActionListener(event -> toggleFullScreen());
-        titleControls.add(fullScreenButton);
-        titleControls.add(Box.createHorizontalStrut(3));
 
         muteButton.addActionListener(event -> updateMutedState(muteButton.isSelected()));
         titleControls.add(muteButton);
@@ -209,28 +189,9 @@ final class PlaybackWindow extends JFrame {
         addComponentListener(new ComponentAdapter() {
             @Override
             public void componentResized(ComponentEvent event) {
-                if (!adjustingAspect && sourceWidth > 0 && sourceHeight > 0 && !fullScreen) {
+                if (!adjustingAspect && sourceWidth > 0 && sourceHeight > 0
+                        && (getExtendedState() & MAXIMIZED_BOTH) == 0) {
                     aspectTimer.restart();
-                }
-            }
-        });
-
-        JRootPane rootPane = getRootPane();
-        rootPane.getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW)
-                .put(KeyStroke.getKeyStroke("F11"), "toggleFullScreen");
-        rootPane.getActionMap().put("toggleFullScreen", new AbstractAction() {
-            @Override
-            public void actionPerformed(ActionEvent event) {
-                toggleFullScreen();
-            }
-        });
-        rootPane.getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW)
-                .put(KeyStroke.getKeyStroke("ESCAPE"), "leaveFullScreen");
-        rootPane.getActionMap().put("leaveFullScreen", new AbstractAction() {
-            @Override
-            public void actionPerformed(ActionEvent event) {
-                if (fullScreen) {
-                    leaveFullScreen();
                 }
             }
         });
@@ -249,39 +210,6 @@ final class PlaybackWindow extends JFrame {
         controller.setMuted(muted);
         muteButton.setIcon(new FlatSVGIcon(muted ? "icons/muted.svg" : "icons/volume.svg", 17, 17));
         muteButton.setToolTipText(i18n.text(muted ? "player.unmute" : "player.mute"));
-    }
-
-    private void toggleFullScreen() {
-        if (fullScreen) {
-            leaveFullScreen();
-            return;
-        }
-        windowedBounds = getBounds();
-        GraphicsConfiguration configuration = getGraphicsConfiguration();
-        GraphicsDevice device = configuration == null ? null : configuration.getDevice();
-        if (device != null) {
-            fullScreen = true;
-            titleControls.setVisible(false);
-            device.setFullScreenWindow(this);
-        }
-    }
-
-    private void leaveFullScreen() {
-        GraphicsConfiguration configuration = getGraphicsConfiguration();
-        GraphicsDevice device = configuration == null ? null : configuration.getDevice();
-        if (device != null && device.getFullScreenWindow() == this) {
-            device.setFullScreenWindow(null);
-        }
-        fullScreen = false;
-        titleControls.setVisible(true);
-        if (windowedBounds != null) {
-            adjustingAspect = true;
-            try {
-                setBounds(windowedBounds);
-            } finally {
-                adjustingAspect = false;
-            }
-        }
     }
 
     private void fitWindowToVideo(int width, int height) {
@@ -307,7 +235,7 @@ final class PlaybackWindow extends JFrame {
     }
 
     private void enforceAspectRatio() {
-        if (sourceWidth <= 0 || sourceHeight <= 0 || fullScreen
+        if (sourceWidth <= 0 || sourceHeight <= 0
                 || (getExtendedState() & MAXIMIZED_BOTH) != 0 || adjustingAspect) {
             return;
         }
@@ -395,12 +323,6 @@ final class PlaybackWindow extends JFrame {
         }
         return new Dimension(Math.max(1, (int) Math.round(currentHeight * aspect)),
                 Math.max(1, currentHeight));
-    }
-
-    private static JButton iconButton(String icon, int size) {
-        JButton button = new JButton(new FlatSVGIcon(icon, size, size));
-        styleTitleButton(button);
-        return button;
     }
 
     private static JToggleButton toggleButton(String icon, int size) {

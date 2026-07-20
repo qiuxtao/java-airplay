@@ -3,6 +3,7 @@ package com.github.serezhka.airplay.player.gstreamer;
 import com.github.serezhka.airplay.lib.AudioStreamInfo;
 import com.github.serezhka.airplay.lib.VideoStreamInfo;
 import com.github.serezhka.airplay.server.AirPlayConsumer;
+import com.sun.jna.Platform;
 import lombok.extern.slf4j.Slf4j;
 import org.freedesktop.gstreamer.Buffer;
 import org.freedesktop.gstreamer.Bus;
@@ -25,6 +26,7 @@ import javax.swing.SwingUtilities;
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.lang.reflect.InvocationTargetException;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
@@ -37,7 +39,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public final class GstPlayer implements AirPlayConsumer, AutoCloseable {
 
     private static final long VIDEO_QUEUE_BYTES = 4L * 1024 * 1024;
-    private static final long AUDIO_QUEUE_BYTES = 1024L * 1024;
+    private static final long AUDIO_QUEUE_BYTES = 256L * 1024;
+    private static final long AUDIO_QUEUE_TIME_NS = 150_000_000L;
+    private static final int AUDIO_QUEUE_BUFFERS = 24;
 
     private final Object videoLock = new Object();
     private final Object audioLock = new Object();
@@ -134,10 +138,6 @@ public final class GstPlayer implements AirPlayConsumer, AutoCloseable {
             video = null;
             lastWidth = 0;
             lastHeight = 0;
-            if (!closed.get()) {
-                video = createVideoPipeline();
-                installVideoComponent(video.component());
-            }
         }
         requestMemoryReclaim();
     }
@@ -150,7 +150,7 @@ public final class GstPlayer implements AirPlayConsumer, AutoCloseable {
             }
             releaseAudioPipeline(audio);
             audioCompressionType = audioStreamInfo.getCompressionType();
-            audio = createAudioPipeline(audioCompressionType);
+            audio = createAudioPipeline(audioStreamInfo);
             applyVolume(audio);
             audio.pipeline().play();
         }
@@ -161,7 +161,7 @@ public final class GstPlayer implements AirPlayConsumer, AutoCloseable {
         synchronized (audioLock) {
             AudioPipeline current = audio;
             if (current != null && current.type() == audioCompressionType && !closed.get()) {
-                push(current.source(), bytes);
+                push(current.source(), bytes, current.frameDurationNs());
             }
         }
     }
@@ -216,31 +216,43 @@ public final class GstPlayer implements AirPlayConsumer, AutoCloseable {
         return new VideoPipeline(pipeline, source, sink, sinkPad, bus, component);
     }
 
-    private AudioPipeline createAudioPipeline(AudioStreamInfo.CompressionType type) {
+    private AudioPipeline createAudioPipeline(AudioStreamInfo streamInfo) {
+        AudioStreamInfo.CompressionType type = streamInfo.getCompressionType();
+        AudioFormatSpec format = audioFormatSpec(streamInfo);
         String decoder;
         String caps;
         if (type == AudioStreamInfo.CompressionType.ALAC) {
             decoder = "avdec_alac";
-            caps = "audio/x-alac,mpegversion=(int)4,channels=(int)2,rate=(int)44100,"
+            caps = "audio/x-alac,mpegversion=(int)4,channels=(int)" + format.channels()
+                    + ",rate=(int)" + format.sampleRate() + ","
                     + "stream-format=raw,codec_data=(buffer)"
-                    + "00000024616c616300000000000001600010280a0e0200ff00000000000000000000ac44";
-        } else {
+                    + alacCodecData(format);
+        } else if (type == AudioStreamInfo.CompressionType.AAC_ELD) {
             decoder = "avdec_aac";
-            caps = "audio/mpeg,mpegversion=(int)4,channels=(int)2,rate=(int)44100,"
-                    + "stream-format=raw,codec_data=(buffer)f8e85000";
+            caps = "audio/mpeg,mpegversion=(int)4,channels=(int)" + format.channels()
+                    + ",rate=(int)" + format.sampleRate() + ","
+                    + "stream-format=raw,codec_data=(buffer)" + aacEldCodecData(format);
+        } else {
+            throw new IllegalArgumentException("Unsupported AirPlay audio compression: " + type);
         }
 
+        String sink = Platform.isWindows()
+                ? "wasapi2sink low-latency=true sync=true"
+                : "autoaudiosink sync=true";
         Pipeline pipeline = (Pipeline) Gst.parseLaunch(
                 "appsrc name=audio-source max-bytes=" + AUDIO_QUEUE_BYTES
-                        + " max-buffers=512 block=true "
+                        + " max-buffers=" + AUDIO_QUEUE_BUFFERS
+                        + " max-time=" + AUDIO_QUEUE_TIME_NS + " block=true "
                         + "! " + decoder + " ! audioconvert ! audioresample "
-                        + "! volume name=audio-volume ! autoaudiosink sync=false");
+                        + "! volume name=audio-volume ! " + sink);
         AppSrc source = (AppSrc) pipeline.getElementByName("audio-source");
-        configureSource(source, caps, AUDIO_QUEUE_BYTES, false);
+        configureSource(source, caps, AUDIO_QUEUE_BYTES, true);
+        source.set("min-latency", 0L);
+        source.set("max-latency", AUDIO_QUEUE_TIME_NS);
         Element volumeElement = pipeline.getElementByName("audio-volume");
         Bus bus = pipeline.getBus();
         attachBusHandlers(bus);
-        return new AudioPipeline(type, pipeline, source, volumeElement, bus);
+        return new AudioPipeline(type, pipeline, source, volumeElement, bus, format.frameDurationNs());
     }
 
     private GstVideoComponent createVideoComponent(AppSink sink) {
@@ -297,12 +309,19 @@ public final class GstPlayer implements AirPlayConsumer, AutoCloseable {
     }
 
     private void push(AppSrc source, byte[] bytes) {
+        push(source, bytes, 0);
+    }
+
+    private void push(AppSrc source, byte[] bytes, long durationNs) {
         Buffer buffer = new Buffer(bytes.length);
         try {
             try {
                 buffer.map(true).put(bytes);
             } finally {
                 buffer.unmap();
+            }
+            if (durationNs > 0) {
+                buffer.setDuration(durationNs);
             }
             FlowReturn result = source.pushBuffer(buffer);
             // gst_app_src_push_buffer takes ownership for every returned flow status.
@@ -346,9 +365,17 @@ public final class GstPlayer implements AirPlayConsumer, AutoCloseable {
     }
 
     private void validateAudioPipelines() {
-        AudioPipeline alac = createAudioPipeline(AudioStreamInfo.CompressionType.ALAC);
+        AudioPipeline alac = createAudioPipeline(new AudioStreamInfo.AudioStreamInfoBuilder()
+                .compressionType(AudioStreamInfo.CompressionType.ALAC)
+                .audioFormat(AudioStreamInfo.AudioFormat.ALAC_44100_16_2)
+                .samplesPerFrame(352)
+                .build());
         releaseAudioPipeline(alac);
-        AudioPipeline aacEld = createAudioPipeline(AudioStreamInfo.CompressionType.AAC_ELD);
+        AudioPipeline aacEld = createAudioPipeline(new AudioStreamInfo.AudioStreamInfoBuilder()
+                .compressionType(AudioStreamInfo.CompressionType.AAC_ELD)
+                .audioFormat(AudioStreamInfo.AudioFormat.AAC_ELD_48000_2)
+                .samplesPerFrame(480)
+                .build());
         releaseAudioPipeline(aacEld);
     }
 
@@ -413,6 +440,49 @@ public final class GstPlayer implements AirPlayConsumer, AutoCloseable {
         return Math.max(0, Math.min(1, value));
     }
 
+    static AudioFormatSpec audioFormatSpec(AudioStreamInfo streamInfo) {
+        AudioStreamInfo.AudioFormat negotiated = streamInfo.getAudioFormat();
+        int sampleRate = negotiated == null ? 44100 : negotiated.getSampleRate();
+        int sampleSize = negotiated == null ? 16 : negotiated.getSampleSize();
+        int channels = negotiated == null ? 2 : negotiated.getChannels();
+        int defaultSamples = streamInfo.getCompressionType() == AudioStreamInfo.CompressionType.ALAC ? 352 : 480;
+        int samplesPerFrame = streamInfo.getSamplesPerFrame() > 0
+                ? streamInfo.getSamplesPerFrame()
+                : defaultSamples;
+        long frameDurationNs = Math.round(samplesPerFrame * 1_000_000_000d / sampleRate);
+        return new AudioFormatSpec(sampleRate, sampleSize, channels, samplesPerFrame, frameDurationNs);
+    }
+
+    static String alacCodecData(AudioFormatSpec format) {
+        return String.format(Locale.ROOT,
+                "00000024616c616300000000%08x00%02x280a0e%02x00ff0000000000000000%08x",
+                format.samplesPerFrame(), format.sampleSize(), format.channels(), format.sampleRate());
+    }
+
+    static String aacEldCodecData(AudioFormatSpec format) {
+        int frequencyIndex = switch (format.sampleRate()) {
+            case 96000 -> 0;
+            case 88200 -> 1;
+            case 64000 -> 2;
+            case 48000 -> 3;
+            case 44100 -> 4;
+            case 32000 -> 5;
+            case 24000 -> 6;
+            case 22050 -> 7;
+            case 16000 -> 8;
+            case 12000 -> 9;
+            case 11025 -> 10;
+            case 8000 -> 11;
+            case 7350 -> 12;
+            default -> throw new IllegalArgumentException("Unsupported AAC-ELD sample rate: " + format.sampleRate());
+        };
+        if (format.channels() < 1 || format.channels() > 2) {
+            throw new IllegalArgumentException("Unsupported AAC-ELD channel count: " + format.channels());
+        }
+        int config = 0xf8e01000 | frequencyIndex << 17 | format.channels() << 13;
+        return String.format(Locale.ROOT, "%08x", config);
+    }
+
     private record VideoPipeline(Pipeline pipeline,
                                  AppSrc source,
                                  AppSink sink,
@@ -421,10 +491,18 @@ public final class GstPlayer implements AirPlayConsumer, AutoCloseable {
                                  GstVideoComponent component) {
     }
 
+    record AudioFormatSpec(int sampleRate,
+                           int sampleSize,
+                           int channels,
+                           int samplesPerFrame,
+                           long frameDurationNs) {
+    }
+
     private record AudioPipeline(AudioStreamInfo.CompressionType type,
                                  Pipeline pipeline,
                                  AppSrc source,
                                  Element volume,
-                                 Bus bus) {
+                                 Bus bus,
+                                 long frameDurationNs) {
     }
 }

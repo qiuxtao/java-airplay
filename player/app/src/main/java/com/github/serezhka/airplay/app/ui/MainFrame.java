@@ -380,6 +380,7 @@ public final class MainFrame extends JFrame implements ReceiverView {
     }
 
     private void refreshStatus() {
+        statusLabel.setVisible(playing || serverState != ServerState.READY);
         if (playing) {
             statusLabel.setText(i18n.text("state.playing"));
             statusLabel.putClientProperty("FlatLaf.style",
