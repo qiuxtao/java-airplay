@@ -1,6 +1,7 @@
 package com.github.serezhka.airplay.app.ui;
 
 import com.formdev.flatlaf.extras.FlatSVGIcon;
+import com.formdev.flatlaf.FlatLaf;
 import com.github.serezhka.airplay.app.AppPaths;
 import com.github.serezhka.airplay.app.ReceiverController;
 import com.github.serezhka.airplay.app.ReceiverView;
@@ -26,10 +27,17 @@ import java.awt.Cursor;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Font;
+import java.awt.GradientPaint;
 import java.awt.GraphicsEnvironment;
+import java.awt.Graphics2D;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.Insets;
+import java.awt.LayoutManager;
+import java.awt.RadialGradientPaint;
+import java.awt.RenderingHints;
+import java.awt.geom.Point2D;
+import java.awt.geom.RoundRectangle2D;
 import java.util.List;
 
 public final class MainFrame extends JFrame implements ReceiverView {
@@ -155,10 +163,12 @@ public final class MainFrame extends JFrame implements ReceiverView {
     }
 
     private void buildUi() {
-        JPanel root = new JPanel(new BorderLayout());
+        JPanel root = new BrandBackgroundPanel();
+        root.setLayout(new BorderLayout());
         root.add(buildAppBar(), BorderLayout.NORTH);
 
         JPanel workspace = new JPanel(new BorderLayout(0, 16));
+        workspace.setOpaque(false);
         workspace.setBorder(BorderFactory.createEmptyBorder(22, 28, 28, 28));
         workspace.add(buildErrorBanner(), BorderLayout.NORTH);
         workspace.add(buildDashboard(), BorderLayout.CENTER);
@@ -167,9 +177,9 @@ public final class MainFrame extends JFrame implements ReceiverView {
     }
 
     private JPanel buildAppBar() {
-        JPanel appBar = new JPanel(new BorderLayout());
+        JPanel appBar = new AppBarPanel();
+        appBar.setLayout(new BorderLayout());
         appBar.setBorder(BorderFactory.createEmptyBorder(15, 28, 15, 22));
-        appBar.putClientProperty("FlatLaf.style", "background: darken(@background,3%)");
 
         JLabel product = new JLabel("  AirPlay Receiver", new FlatSVGIcon("icons/app.svg", 32, 32),
                 SwingConstants.LEFT);
@@ -210,6 +220,7 @@ public final class MainFrame extends JFrame implements ReceiverView {
 
     private JPanel buildDashboard() {
         JPanel dashboard = new JPanel(new GridBagLayout());
+        dashboard.setOpaque(false);
         GridBagConstraints constraints = new GridBagConstraints();
         constraints.gridx = 0;
         constraints.gridy = 0;
@@ -394,17 +405,11 @@ public final class MainFrame extends JFrame implements ReceiverView {
     }
 
     private static JPanel cardPanel() {
-        JPanel panel = new JPanel();
-        panel.putClientProperty("FlatLaf.style",
-                "arc: 22; background: lighten(@background,2%); border: 1,1,1,1,fade(@foreground,7%),1,22");
-        return panel;
+        return new BrandCard(false, null);
     }
 
-    private static JPanel cardPanel(java.awt.LayoutManager layout) {
-        JPanel panel = new JPanel(layout);
-        panel.putClientProperty("FlatLaf.style",
-                "arc: 22; background: lighten(@background,2%); border: 1,1,1,1,fade(@foreground,7%),1,22");
-        return panel;
+    private static JPanel cardPanel(LayoutManager layout) {
+        return new BrandCard(layout instanceof BorderLayout, layout);
     }
 
     private static JLabel heading(float size, int style) {
@@ -467,5 +472,85 @@ public final class MainFrame extends JFrame implements ReceiverView {
             case STARTING, STOPPING -> "arc: 999; background: fade(#e39b24,18%); foreground: #c88413";
             case STOPPED -> "arc: 999; background: fade(#7a8190,16%); foreground: #7a8190";
         };
+    }
+
+    private static final class BrandBackgroundPanel extends JPanel {
+
+        BrandBackgroundPanel() {
+            setOpaque(false);
+        }
+
+        @Override
+        protected void paintComponent(java.awt.Graphics graphics) {
+            Graphics2D g = (Graphics2D) graphics.create();
+            g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            boolean dark = FlatLaf.isLafDark();
+            Color top = dark ? new Color(8, 13, 28) : new Color(247, 249, 255);
+            Color bottom = dark ? new Color(17, 25, 48) : new Color(232, 239, 253);
+            g.setPaint(new GradientPaint(0, 0, top, 0, Math.max(1, getHeight()), bottom));
+            g.fillRect(0, 0, getWidth(), getHeight());
+
+            float radius = Math.max(240f, getWidth() * 0.62f);
+            Color glow = dark ? new Color(77, 96, 255, 72) : new Color(92, 119, 255, 58);
+            g.setPaint(new RadialGradientPaint(
+                    new Point2D.Float(getWidth() * 0.78f, getHeight() * 0.08f), radius,
+                    new float[]{0f, 0.52f, 1f},
+                    new Color[]{glow, new Color(glow.getRed(), glow.getGreen(), glow.getBlue(), 18),
+                            new Color(glow.getRed(), glow.getGreen(), glow.getBlue(), 0)}));
+            g.fillRect(0, 0, getWidth(), getHeight());
+            g.dispose();
+        }
+    }
+
+    private static final class AppBarPanel extends JPanel {
+
+        AppBarPanel() {
+            setOpaque(false);
+        }
+
+        @Override
+        protected void paintComponent(java.awt.Graphics graphics) {
+            Graphics2D g = (Graphics2D) graphics.create();
+            boolean dark = FlatLaf.isLafDark();
+            g.setColor(dark ? new Color(9, 14, 29, 218) : new Color(255, 255, 255, 210));
+            g.fillRect(0, 0, getWidth(), getHeight());
+            g.setColor(dark ? new Color(112, 131, 230, 42) : new Color(84, 105, 190, 35));
+            g.drawLine(0, getHeight() - 1, getWidth(), getHeight() - 1);
+            g.dispose();
+            super.paintComponent(graphics);
+        }
+    }
+
+    private static final class BrandCard extends JPanel {
+
+        private final boolean hero;
+
+        BrandCard(boolean hero, LayoutManager layout) {
+            super(layout);
+            this.hero = hero;
+            setOpaque(false);
+        }
+
+        @Override
+        protected void paintComponent(java.awt.Graphics graphics) {
+            Graphics2D g = (Graphics2D) graphics.create();
+            g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            boolean dark = FlatLaf.isLafDark();
+            RoundRectangle2D shape = new RoundRectangle2D.Float(
+                    0.5f, 0.5f, getWidth() - 1f, getHeight() - 1f, 24f, 24f);
+            if (hero) {
+                Color start = dark ? new Color(30, 40, 77, 238) : new Color(255, 255, 255, 242);
+                Color end = dark ? new Color(20, 31, 60, 238) : new Color(235, 241, 255, 242);
+                g.setPaint(new GradientPaint(0, 0, start, getWidth(), getHeight(), end));
+            } else {
+                g.setColor(dark ? new Color(20, 27, 48, 224) : new Color(255, 255, 255, 224));
+            }
+            g.fill(shape);
+            g.setColor(dark ? new Color(119, 137, 231, hero ? 70 : 42)
+                    : new Color(96, 116, 196, hero ? 60 : 36));
+            g.draw(shape);
+            g.dispose();
+            super.paintComponent(graphics);
+        }
     }
 }
