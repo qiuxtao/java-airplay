@@ -8,6 +8,8 @@ import com.github.serezhka.airplay.server.SessionInfo;
 
 import javax.swing.AbstractAction;
 import javax.swing.BorderFactory;
+import javax.swing.Box;
+import javax.swing.BoxLayout;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
 import javax.swing.JComponent;
@@ -43,7 +45,9 @@ final class PlaybackWindow extends JFrame {
     private final I18n i18n;
     private final JPanel player = new JPanel(new BorderLayout());
     private final JPanel controlOverlay = new JPanel(new BorderLayout());
-    private final JPanel controls = new JPanel(new BorderLayout(12, 0));
+    private final JPanel controls = new JPanel();
+    private final JPanel sessionPanel = new JPanel();
+    private final JPanel actionsPanel = new JPanel();
     private final JLabel sessionLabel = new JLabel();
     private final JLabel formatLabel = new JLabel("—");
     private final JButton fullScreenButton = iconButton("icons/fullscreen.svg", 18);
@@ -54,6 +58,7 @@ final class PlaybackWindow extends JFrame {
     private final Timer hideControlsTimer;
     private boolean activeSession;
     private boolean fullScreen;
+    private boolean portraitControls;
     private Rectangle windowedBounds;
     private String sessionAddress;
 
@@ -103,11 +108,13 @@ final class PlaybackWindow extends JFrame {
         if (fullScreen) {
             leaveFullScreen();
         }
+        applyControlLayout(false);
         setVisible(false);
     }
 
     void updateVideoFormat(int width, int height) {
         formatLabel.setText(width + " × " + height);
+        applyControlLayout(height > width);
         if (!fullScreen && width > 0 && height > 0) {
             fitWindowToVideo(width, height);
         }
@@ -138,39 +145,27 @@ final class PlaybackWindow extends JFrame {
 
         controls.setBorder(BorderFactory.createEmptyBorder(10, 16, 10, 12));
         controls.setBackground(new Color(20, 22, 28));
-        JPanel session = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 3));
-        session.setOpaque(false);
+        sessionPanel.setOpaque(false);
         sessionLabel.setForeground(Color.WHITE);
         sessionLabel.setFont(sessionLabel.getFont().deriveFont(13f));
         formatLabel.setForeground(new Color(177, 183, 196));
-        session.add(sessionLabel);
-        session.add(formatLabel);
-        controls.add(session, BorderLayout.CENTER);
 
-        JPanel actions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
-        actions.setOpaque(false);
+        actionsPanel.setOpaque(false);
         fullScreenButton.addActionListener(event -> toggleFullScreen());
-        actions.add(fullScreenButton);
         muteButton.addActionListener(event -> updateMutedState(muteButton.isSelected()));
-        actions.add(muteButton);
-        volume.setPreferredSize(new Dimension(96, 28));
         volume.addChangeListener(event -> controller.setVolume(volume.getValue() / 100.0));
-        actions.add(volume);
         alwaysOnTop.setForeground(Color.WHITE);
         alwaysOnTop.addActionListener(event -> setAlwaysOnTop(alwaysOnTop.isSelected()));
-        actions.add(alwaysOnTop);
         stopButton.addActionListener(event -> requestDisconnect());
-        actions.add(stopButton);
-        controls.add(actions, BorderLayout.EAST);
 
         controlOverlay.setOpaque(false);
-        controlOverlay.add(controls, BorderLayout.SOUTH);
         controlOverlay.setAlignmentX(0.5f);
         controlOverlay.setAlignmentY(0.5f);
         controller.videoComponent().setAlignmentX(0.5f);
         controller.videoComponent().setAlignmentY(0.5f);
         player.add(controlOverlay);
         player.add(controller.videoComponent());
+        applyControlLayout(false);
         installControlHover(controls);
         setContentPane(player);
     }
@@ -266,13 +261,88 @@ final class PlaybackWindow extends JFrame {
         }
         Rectangle screen = configuration.getBounds();
         int maximumWidth = Math.min(1180, (int) (screen.width * 0.82));
-        int maximumVideoHeight = Math.min(760, (int) (screen.height * 0.78) - controls.getPreferredSize().height);
+        int controlHeight = portraitControls ? 0 : controls.getPreferredSize().height;
+        int maximumVideoHeight = Math.min(760, (int) (screen.height * 0.78) - controlHeight);
         double scale = Math.min((double) maximumWidth / width, (double) maximumVideoHeight / height);
         int targetWidth = Math.max(MINIMUM_WINDOW_SIZE.width, (int) Math.round(width * scale));
         int targetHeight = Math.max(MINIMUM_WINDOW_SIZE.height,
-                (int) Math.round(height * scale) + controls.getPreferredSize().height);
+                (int) Math.round(height * scale) + controlHeight);
         setSize(Math.min(targetWidth, maximumWidth), Math.min(targetHeight, screen.height - 80));
         setLocationRelativeTo(null);
+    }
+
+    private void applyControlLayout(boolean portrait) {
+        if (portraitControls == portrait && controls.getParent() == controlOverlay) {
+            return;
+        }
+        portraitControls = portrait;
+        controlOverlay.removeAll();
+        controls.removeAll();
+        sessionPanel.removeAll();
+        actionsPanel.removeAll();
+
+        if (portrait) {
+            controls.setLayout(new BorderLayout(0, 18));
+            controls.setBorder(BorderFactory.createEmptyBorder(18, 15, 16, 15));
+            controls.setPreferredSize(new Dimension(196, 0));
+
+            sessionPanel.setLayout(new BoxLayout(sessionPanel, BoxLayout.Y_AXIS));
+            sessionLabel.setAlignmentX(LEFT_ALIGNMENT);
+            formatLabel.setAlignmentX(LEFT_ALIGNMENT);
+            sessionPanel.add(sessionLabel);
+            sessionPanel.add(Box.createVerticalStrut(5));
+            sessionPanel.add(formatLabel);
+
+            actionsPanel.setLayout(new BoxLayout(actionsPanel, BoxLayout.Y_AXIS));
+            JPanel compactActions = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+            compactActions.setOpaque(false);
+            compactActions.setAlignmentX(LEFT_ALIGNMENT);
+            compactActions.add(fullScreenButton);
+            compactActions.add(muteButton);
+            actionsPanel.add(compactActions);
+            actionsPanel.add(Box.createVerticalStrut(14));
+            volume.setOrientation(SwingConstants.HORIZONTAL);
+            volume.setMaximumSize(new Dimension(Integer.MAX_VALUE, 30));
+            volume.setPreferredSize(new Dimension(160, 30));
+            volume.setAlignmentX(LEFT_ALIGNMENT);
+            actionsPanel.add(volume);
+            actionsPanel.add(Box.createVerticalStrut(12));
+            alwaysOnTop.setAlignmentX(LEFT_ALIGNMENT);
+            actionsPanel.add(alwaysOnTop);
+            actionsPanel.add(Box.createVerticalStrut(14));
+            stopButton.setAlignmentX(LEFT_ALIGNMENT);
+            stopButton.setMaximumSize(new Dimension(Integer.MAX_VALUE, 38));
+            actionsPanel.add(stopButton);
+
+            controls.add(sessionPanel, BorderLayout.NORTH);
+            controls.add(actionsPanel, BorderLayout.CENTER);
+            controlOverlay.add(controls, BorderLayout.EAST);
+        } else {
+            controls.setLayout(new BorderLayout(12, 0));
+            controls.setBorder(BorderFactory.createEmptyBorder(10, 16, 10, 12));
+            controls.setPreferredSize(null);
+
+            sessionPanel.setLayout(new FlowLayout(FlowLayout.LEFT, 10, 3));
+            sessionPanel.add(sessionLabel);
+            sessionPanel.add(formatLabel);
+
+            actionsPanel.setLayout(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+            actionsPanel.add(fullScreenButton);
+            actionsPanel.add(muteButton);
+            volume.setOrientation(SwingConstants.HORIZONTAL);
+            volume.setMaximumSize(null);
+            volume.setPreferredSize(new Dimension(96, 28));
+            actionsPanel.add(volume);
+            actionsPanel.add(alwaysOnTop);
+            stopButton.setMaximumSize(null);
+            actionsPanel.add(stopButton);
+
+            controls.add(sessionPanel, BorderLayout.CENTER);
+            controls.add(actionsPanel, BorderLayout.EAST);
+            controlOverlay.add(controls, BorderLayout.SOUTH);
+        }
+        controlOverlay.revalidate();
+        controlOverlay.repaint();
     }
 
     private void showControls() {

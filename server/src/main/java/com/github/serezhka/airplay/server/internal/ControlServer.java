@@ -108,18 +108,26 @@ public final class ControlServer {
     }
 
     private void shutdownGroups() {
+        io.netty.util.concurrent.Future<?> bossShutdown = null;
+        io.netty.util.concurrent.Future<?> workerShutdown = null;
         if (bossGroup != null) {
-            bossGroup.shutdownGracefully(0, 2, TimeUnit.SECONDS).syncUninterruptibly();
+            bossShutdown = bossGroup.shutdownGracefully(0, 1, TimeUnit.SECONDS);
             bossGroup = null;
         }
         if (workerGroup != null) {
-            workerGroup.shutdownGracefully(0, 2, TimeUnit.SECONDS).syncUninterruptibly();
+            workerShutdown = workerGroup.shutdownGracefully(0, 1, TimeUnit.SECONDS);
             workerGroup = null;
+        }
+        if (bossShutdown != null) {
+            bossShutdown.awaitUninterruptibly(1, TimeUnit.SECONDS);
+        }
+        if (workerShutdown != null) {
+            workerShutdown.awaitUninterruptibly(1, TimeUnit.SECONDS);
         }
     }
 
     private EventLoopGroup eventLoopGroup() {
-        return new NioEventLoopGroup();
+        return new NioEventLoopGroup(1);
     }
 
     private Class<? extends ServerSocketChannel> serverSocketChannelClass() {

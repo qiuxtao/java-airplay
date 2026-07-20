@@ -5,6 +5,7 @@ import com.github.serezhka.airplay.app.settings.AppSettings;
 import com.github.serezhka.airplay.app.settings.SettingsStore;
 import com.github.serezhka.airplay.app.theme.ThemeManager;
 import com.github.serezhka.airplay.app.ui.MainFrame;
+import com.github.serezhka.airplay.player.gstreamer.GstPlayer;
 import com.github.serezhka.airplay.player.gstreamer.GstRuntime;
 import org.slf4j.LoggerFactory;
 
@@ -59,6 +60,9 @@ public final class PlayerApp {
         }
         if (!runtime.available()) {
             throw new IllegalStateException(String.join(System.lineSeparator(), runtime.problems()));
+        }
+        try (GstPlayer ignored = new GstPlayer()) {
+            // Construct all production pipelines so missing properties or plug-ins fail the smoke test.
         }
         System.out.println("AirPlay Receiver self-test passed. GStreamer: " + runtime.root());
     }

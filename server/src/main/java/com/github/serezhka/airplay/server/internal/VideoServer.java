@@ -69,19 +69,23 @@ public final class VideoServer {
             serverChannel.close().syncUninterruptibly();
             serverChannel = null;
         }
-        if (bossGroup != null) {
-            bossGroup.shutdownGracefully(0, 2, TimeUnit.SECONDS).syncUninterruptibly();
-            bossGroup = null;
+        io.netty.util.concurrent.Future<?> bossShutdown = bossGroup == null
+                ? null : bossGroup.shutdownGracefully(0, 1, TimeUnit.SECONDS);
+        io.netty.util.concurrent.Future<?> workerShutdown = workerGroup == null
+                ? null : workerGroup.shutdownGracefully(0, 1, TimeUnit.SECONDS);
+        bossGroup = null;
+        workerGroup = null;
+        if (bossShutdown != null) {
+            bossShutdown.awaitUninterruptibly(1, TimeUnit.SECONDS);
         }
-        if (workerGroup != null) {
-            workerGroup.shutdownGracefully(0, 2, TimeUnit.SECONDS).syncUninterruptibly();
-            workerGroup = null;
+        if (workerShutdown != null) {
+            workerShutdown.awaitUninterruptibly(1, TimeUnit.SECONDS);
         }
         port = 0;
     }
 
     private EventLoopGroup eventLoopGroup() {
-        return new NioEventLoopGroup();
+        return new NioEventLoopGroup(1);
     }
 
     private Class<? extends ServerSocketChannel> serverSocketChannelClass() {

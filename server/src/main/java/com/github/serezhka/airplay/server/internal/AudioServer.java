@@ -64,14 +64,14 @@ public final class AudioServer {
             channel = null;
         }
         if (workerGroup != null) {
-            workerGroup.shutdownGracefully(0, 2, TimeUnit.SECONDS).syncUninterruptibly();
+            workerGroup.shutdownGracefully(0, 1, TimeUnit.SECONDS).awaitUninterruptibly(1, TimeUnit.SECONDS);
             workerGroup = null;
         }
         port = 0;
     }
 
     private EventLoopGroup eventLoopGroup() {
-        return new NioEventLoopGroup();
+        return new NioEventLoopGroup(1);
     }
 
     private Class<? extends DatagramChannel> datagramChannelClass() {

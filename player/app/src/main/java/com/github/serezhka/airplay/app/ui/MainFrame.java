@@ -21,6 +21,7 @@ import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JTextArea;
 import javax.swing.SwingConstants;
+import javax.swing.Timer;
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Cursor;
@@ -39,6 +40,7 @@ import java.awt.RenderingHints;
 import java.awt.geom.Point2D;
 import java.awt.geom.RoundRectangle2D;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class MainFrame extends JFrame implements ReceiverView {
 
@@ -63,6 +65,7 @@ public final class MainFrame extends JFrame implements ReceiverView {
     private final JButton settingsButton = iconButton("icons/settings.svg", 18);
     private final JButton logsButton = iconButton("icons/logs.svg", 17);
     private final JButton firewallButton = new JButton();
+    private final AtomicBoolean exiting = new AtomicBoolean();
     private TrayController tray;
     private AppSettings settings;
     private boolean playing;
@@ -88,7 +91,7 @@ public final class MainFrame extends JFrame implements ReceiverView {
     public void onServerState(ServerState state) {
         serverState = state;
         refreshStatus();
-        tray.update(state);
+        tray.update(state, playing);
         if (state == ServerState.READY) {
             hideError();
         }
@@ -98,6 +101,8 @@ public final class MainFrame extends JFrame implements ReceiverView {
     public void onSessionStarted(SessionInfo session) {
         playing = true;
         refreshHero();
+        refreshStatus();
+        tray.update(serverState, true);
         playbackWindow.showSession(session, settings);
     }
 
@@ -105,6 +110,8 @@ public final class MainFrame extends JFrame implements ReceiverView {
     public void onSessionStopped() {
         playing = false;
         refreshHero();
+        refreshStatus();
+        tray.update(serverState, false);
         playbackWindow.endSession();
     }
 
@@ -142,7 +149,7 @@ public final class MainFrame extends JFrame implements ReceiverView {
             tray.close();
             tray = new TrayController(this, i18n);
         }
-        tray.update(serverState);
+        tray.update(serverState, playing);
     }
 
     public void restoreAndShow() {
@@ -155,11 +162,24 @@ public final class MainFrame extends JFrame implements ReceiverView {
     }
 
     public void exitApplication() {
-        tray.close();
+        if (!exiting.compareAndSet(false, true)) {
+            return;
+        }
+        setVisible(false);
         playbackWindow.closeWindow();
-        controller.close();
+        tray.close();
         dispose();
-        System.exit(0);
+
+        Timer forcedExit = new Timer(3000, event -> System.exit(0));
+        forcedExit.setRepeats(false);
+        forcedExit.start();
+        Thread.ofPlatform().name("airplay-shutdown").start(() -> {
+            try {
+                controller.close();
+            } finally {
+                System.exit(0);
+            }
+        });
     }
 
     private void buildUi() {
@@ -360,8 +380,14 @@ public final class MainFrame extends JFrame implements ReceiverView {
     }
 
     private void refreshStatus() {
-        statusLabel.setText(i18n.text("state." + serverState.name().toLowerCase()));
-        statusLabel.putClientProperty("FlatLaf.style", statusStyle(serverState));
+        if (playing) {
+            statusLabel.setText(i18n.text("state.playing"));
+            statusLabel.putClientProperty("FlatLaf.style",
+                    "arc: 999; background: fade(#536dfe,20%); foreground: #7085ff");
+        } else {
+            statusLabel.setText(i18n.text("state." + serverState.name().toLowerCase()));
+            statusLabel.putClientProperty("FlatLaf.style", statusStyle(serverState));
+        }
     }
 
     private String displayDescription(AppSettings appSettings) {

@@ -64,10 +64,8 @@ public final class GstRuntime {
         }
 
         List<String> problems = new ArrayList<>();
-        boolean initialized = false;
         try {
             Gst.init(Version.of(1, 20), "AirPlay Receiver self-test");
-            initialized = true;
             Version actual = Gst.getVersion();
             if (Platform.isWindows() && !actual.checkSatisfies(REQUIRED_WINDOWS_VERSION)) {
                 problems.add("GStreamer 1.28.5 or later is required; found " + actual);
@@ -81,10 +79,6 @@ public final class GstRuntime {
             }
         } catch (RuntimeException | LinkageError error) {
             problems.add("GStreamer could not initialize: " + error.getMessage());
-        } finally {
-            if (initialized) {
-                Gst.deinit();
-            }
         }
         return new RuntimeCheck(problems.isEmpty(), configured.root(), List.copyOf(problems));
     }

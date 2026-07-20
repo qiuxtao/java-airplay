@@ -133,6 +133,12 @@ tasks.register('packageAppImage', Exec) {
                 '--app-version', project.version.toString(),
                 '--vendor', 'java-airplay',
                 '--description', 'Receive AirPlay screen mirroring and audio on Windows',
+                '--java-options', '-Xmx512m',
+                '--java-options', '-XX:MaxDirectMemorySize=256m',
+                '--java-options', '-XX:G1PeriodicGCInterval=30000',
+                '--java-options', '-Dio.netty.allocator.numDirectArenas=2',
+                '--java-options', '-Dio.netty.allocator.numHeapArenas=2',
+                '--java-options', '-Djdk.nio.maxCachedBufferSize=262144',
                 '--add-modules', 'java.base,java.desktop,java.logging,java.management,java.naming,java.prefs,java.sql,java.xml,jdk.crypto.ec,jdk.localedata,jdk.net,jdk.unsupported',
                 '--jlink-options', '--strip-debug --no-header-files --no-man-pages --strip-native-commands --compress=zip-6'
     }

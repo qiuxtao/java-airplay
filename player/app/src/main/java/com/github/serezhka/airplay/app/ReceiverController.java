@@ -20,6 +20,7 @@ import java.awt.GraphicsEnvironment;
 import java.util.Objects;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 @Slf4j
 public final class ReceiverController implements AutoCloseable {
@@ -27,6 +28,7 @@ public final class ReceiverController implements AutoCloseable {
     private final SettingsStore settingsStore;
     private final GstPlayer player;
     private final ThemeManager themeManager;
+    private final AtomicBoolean closed = new AtomicBoolean();
     private final ExecutorService worker = Executors.newSingleThreadExecutor(runnable -> {
         Thread thread = new Thread(runnable, "airplay-controller");
         thread.setDaemon(true);
@@ -154,10 +156,19 @@ public final class ReceiverController implements AutoCloseable {
 
     @Override
     public void close() {
-        server.close();
-        player.close();
-        themeManager.close();
+        if (!closed.compareAndSet(false, true)) {
+            return;
+        }
         worker.shutdownNow();
+        try {
+            server.close();
+        } finally {
+            try {
+                player.close();
+            } finally {
+                themeManager.close();
+            }
+        }
     }
 
     private AirPlayServer createServer(AppSettings appSettings) {

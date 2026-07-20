@@ -10,9 +10,19 @@ import java.net.InetAddress;
 import java.net.NetworkInterface;
 import java.net.SocketException;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Predicate;
 
 /**
@@ -29,7 +39,11 @@ public class AirPlayBonjour {
     private final String serverName;
     private final boolean mirrorOnly;
 
+    private final Object lifecycleLock = new Object();
     private final List<JmDNS> jmDNSList = new ArrayList<>();
+    private final AtomicLong generation = new AtomicLong();
+
+    private ExecutorService registrationExecutor;
 
     public AirPlayBonjour(String serverName) {
         this(serverName, false);
@@ -40,7 +54,7 @@ public class AirPlayBonjour {
         this.mirrorOnly = mirrorOnly;
     }
 
-    public synchronized void start(int airTunesPort) throws Exception {
+    public void start(int airTunesPort) throws Exception {
         stop();
         List<InetAddress> addresses = NetworkInterface.networkInterfaces()
                 .filter(networkInterfaceFilter())
@@ -51,50 +65,145 @@ public class AirPlayBonjour {
             throw new IOException("No active multicast-capable IPv4 network is available");
         }
 
-        Exception lastFailure = null;
-        for (InetAddress inetAddress : addresses) {
-            try {
-                NetworkInterface networkInterface = NetworkInterface.getByInetAddress(inetAddress);
-                byte[] hardwareAddress = networkInterface == null ? null : networkInterface.getHardwareAddress();
-                String mac = hardwareAddressBytesToString(hardwareAddress);
-
-                JmDNS jmDNS = JmDNS.create(inetAddress);
-                jmDNS.registerService(ServiceInfo.create(serverName + AIRPLAY_SERVICE_TYPE,
-                        serverName, airTunesPort, 0, 0, airPlayMDNSProps(mac)));
-                log.info("{} service is registered on address {}, port {}", serverName + AIRPLAY_SERVICE_TYPE,
-                        inetAddress.getHostAddress(), airTunesPort);
-
-                String airTunesServerName = mac.replaceAll(":", "") + "@" + serverName;
-                jmDNS.registerService(ServiceInfo.create(airTunesServerName + AIRTUNES_SERVICE_TYPE,
-                        airTunesServerName, airTunesPort, 0, 0, airTunesMDNSProps()));
-                log.info("{} service is registered on address {}, port {}", airTunesServerName + AIRTUNES_SERVICE_TYPE,
-                        inetAddress.getHostAddress(), airTunesPort);
-
-                jmDNSList.add(jmDNS);
-            } catch (IOException | RuntimeException error) {
-                lastFailure = error;
-                log.warn("Unable to register Bonjour service on {}", inetAddress, error);
-            }
+        long currentGeneration = generation.incrementAndGet();
+        ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
+        synchronized (lifecycleLock) {
+            registrationExecutor = executor;
         }
-        if (jmDNSList.isEmpty()) {
-            IOException error = new IOException("Bonjour registration failed on every available network adapter");
-            if (lastFailure != null) {
-                error.addSuppressed(lastFailure);
+        CompletableFuture<Void> firstAvailable = new CompletableFuture<>();
+        AtomicInteger remaining = new AtomicInteger(addresses.size());
+        AtomicReference<Exception> lastFailure = new AtomicReference<>();
+        addresses.forEach(address -> executor.submit(() -> {
+            try {
+                register(address, airTunesPort, currentGeneration, executor, firstAvailable);
+            } catch (IOException | RuntimeException error) {
+                lastFailure.set(error);
+            } finally {
+                if (remaining.decrementAndGet() == 0) {
+                    if (!firstAvailable.isDone()) {
+                        IOException error = new IOException(
+                                "Bonjour registration failed on every available network adapter");
+                        if (lastFailure.get() != null) {
+                            error.addSuppressed(lastFailure.get());
+                        }
+                        firstAvailable.completeExceptionally(error);
+                    }
+                    executor.shutdown();
+                }
             }
+        }));
+
+        try {
+            firstAvailable.get();
+        } catch (ExecutionException error) {
+            executor.shutdownNow();
+            if (error.getCause() instanceof Exception exception) {
+                throw exception;
+            }
+            throw new RuntimeException(error.getCause());
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            executor.shutdownNow();
             throw error;
         }
     }
 
-    public synchronized void stop() {
-        for (final JmDNS jmDNS : jmDNSList) {
-            jmDNS.unregisterAllServices();
+    public void stop() {
+        generation.incrementAndGet();
+        ExecutorService executor;
+        List<JmDNS> registrations;
+        synchronized (lifecycleLock) {
+            executor = registrationExecutor;
+            registrationExecutor = null;
+            registrations = List.copyOf(jmDNSList);
+            jmDNSList.clear();
+        }
+        if (executor != null) {
+            executor.shutdownNow();
+        }
+        closeRegistrations(registrations);
+    }
+
+    private void register(InetAddress inetAddress,
+                          int airTunesPort,
+                          long expectedGeneration,
+                          ExecutorService executor,
+                          CompletableFuture<Void> firstAvailable) throws IOException {
+        JmDNS jmDNS = null;
+        try {
+            NetworkInterface networkInterface = NetworkInterface.getByInetAddress(inetAddress);
+            byte[] hardwareAddress = networkInterface == null ? null : networkInterface.getHardwareAddress();
+            String mac = hardwareAddressBytesToString(hardwareAddress);
+
+            jmDNS = JmDNS.create(inetAddress);
+            jmDNS.registerService(ServiceInfo.create(serverName + AIRPLAY_SERVICE_TYPE,
+                    serverName, airTunesPort, 0, 0, airPlayMDNSProps(mac)));
+            log.info("{} service is registered on address {}, port {}", serverName + AIRPLAY_SERVICE_TYPE,
+                    inetAddress.getHostAddress(), airTunesPort);
+
+            if (!acceptRegistration(expectedGeneration, executor, jmDNS)) {
+                closeRegistration(jmDNS);
+                return;
+            }
+            firstAvailable.complete(null);
+
+            String airTunesServerName = mac.replaceAll(":", "") + "@" + serverName;
             try {
-                jmDNS.close();
-            } catch (IOException e) {
-                log.warn("Unable to close Bonjour service", e);
+                jmDNS.registerService(ServiceInfo.create(airTunesServerName + AIRTUNES_SERVICE_TYPE,
+                        airTunesServerName, airTunesPort, 0, 0, airTunesMDNSProps()));
+                log.info("{} service is registered on address {}, port {}",
+                        airTunesServerName + AIRTUNES_SERVICE_TYPE,
+                        inetAddress.getHostAddress(), airTunesPort);
+            } catch (IOException | RuntimeException error) {
+                // The AirPlay service is already usable for mirroring. Keep it alive even if the
+                // optional standalone RAOP advertisement cannot be registered on this adapter.
+                log.warn("Unable to register the RAOP service on {}", inetAddress, error);
+            }
+        } catch (IOException | RuntimeException error) {
+            log.warn("Unable to register Bonjour service on {}", inetAddress, error);
+            closeRegistration(jmDNS);
+            throw error;
+        }
+    }
+
+    private boolean acceptRegistration(long expectedGeneration, ExecutorService executor, JmDNS registration) {
+        synchronized (lifecycleLock) {
+            if (generation.get() == expectedGeneration && registrationExecutor == executor) {
+                jmDNSList.add(registration);
+                return true;
             }
         }
-        jmDNSList.clear();
+        return false;
+    }
+
+    private void closeRegistrations(Collection<JmDNS> registrations) {
+        if (registrations.isEmpty()) {
+            return;
+        }
+        ExecutorService closer = Executors.newVirtualThreadPerTaskExecutor();
+        try {
+            closer.invokeAll(registrations.stream()
+                    .<java.util.concurrent.Callable<Void>>map(registration -> () -> {
+                        closeRegistration(registration);
+                        return null;
+                    })
+                    .toList(), 2, TimeUnit.SECONDS);
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+        } finally {
+            closer.shutdownNow();
+        }
+    }
+
+    private void closeRegistration(JmDNS jmDNS) {
+        if (jmDNS == null) {
+            return;
+        }
+        try {
+            jmDNS.close();
+        } catch (IOException error) {
+            log.warn("Unable to close Bonjour service", error);
+        }
     }
 
     private Map<String, String> airPlayMDNSProps(String deviceId) {
@@ -147,8 +256,10 @@ public class AirPlayBonjour {
             try {
                 return !networkInterface.isLoopback()
                         && !networkInterface.isPointToPoint()
+                        && !networkInterface.isVirtual()
                         && networkInterface.isUp()
-                        && networkInterface.supportsMulticast();
+                        && networkInterface.supportsMulticast()
+                        && !looksLikeVirtualAdapter(networkInterface);
             } catch (SocketException e) {
                 return false;
             }
@@ -156,7 +267,27 @@ public class AirPlayBonjour {
     }
 
     private Predicate<InetAddress> inetAddressFilter() {
-        return inetAddress -> inetAddress instanceof Inet4Address /*|| inetAddress instanceof Inet6Address*/;
+        return inetAddress -> inetAddress instanceof Inet4Address
+                && !inetAddress.isAnyLocalAddress()
+                && !inetAddress.isLoopbackAddress()
+                && !inetAddress.isLinkLocalAddress()
+                && !isBenchmarkAddress(inetAddress);
+    }
+
+    private boolean looksLikeVirtualAdapter(NetworkInterface networkInterface) {
+        String description = (networkInterface.getName() + " " + networkInterface.getDisplayName())
+                .toLowerCase(Locale.ROOT);
+        return List.of("virtual", "vmware", "hyper-v", "vethernet", "wsl", "docker", "npcap",
+                        "zerotier", "tailscale", "tunnel", "vpn")
+                .stream()
+                .anyMatch(description::contains);
+    }
+
+    private boolean isBenchmarkAddress(InetAddress address) {
+        byte[] bytes = address.getAddress();
+        return bytes.length == 4
+                && Byte.toUnsignedInt(bytes[0]) == 198
+                && (Byte.toUnsignedInt(bytes[1]) == 18 || Byte.toUnsignedInt(bytes[1]) == 19);
     }
 
     private String hardwareAddressBytesToString(byte[] mac) {

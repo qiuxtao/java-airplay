@@ -22,6 +22,9 @@ import java.awt.GraphicsConfiguration;
 import java.awt.GraphicsDevice;
 import java.awt.GraphicsEnvironment;
 import java.awt.Insets;
+import java.awt.MouseInfo;
+import java.awt.Point;
+import java.awt.PointerInfo;
 import java.awt.Rectangle;
 import java.awt.RenderingHints;
 import java.awt.SystemTray;
@@ -60,7 +63,8 @@ final class TrayController implements AutoCloseable {
             @Override
             public void mouseReleased(MouseEvent event) {
                 if (SwingUtilities.isRightMouseButton(event)) {
-                    SwingUtilities.invokeLater(() -> showPopup(event.getX(), event.getY()));
+                    Point anchor = pointerLocation(event);
+                    SwingUtilities.invokeLater(() -> showPopup(anchor.x, anchor.y));
                 }
             }
         });
@@ -74,18 +78,21 @@ final class TrayController implements AutoCloseable {
             log.warn("System tray is unavailable; closing the window will exit", error);
         }
         trayIcon = installedIcon;
-        update(ServerState.STOPPED);
+        update(ServerState.STOPPED, false);
     }
 
     boolean available() {
         return trayIcon != null;
     }
 
-    void update(ServerState state) {
+    void update(ServerState state, boolean playing) {
         if (trayIcon == null) {
             return;
         }
-        stateLabel.setText(i18n.text("tray.status", i18n.text("state." + state.name().toLowerCase())));
+        String stateText = playing
+                ? i18n.text("state.playing")
+                : i18n.text("state." + state.name().toLowerCase());
+        stateLabel.setText(i18n.text("tray.status", stateText));
     }
 
     void showError(String message) {
@@ -182,6 +189,14 @@ final class TrayController implements AutoCloseable {
         popupWindow.setVisible(true);
         popupWindow.toFront();
         popupWindow.requestFocus();
+    }
+
+    private Point pointerLocation(MouseEvent event) {
+        PointerInfo pointer = MouseInfo.getPointerInfo();
+        if (pointer != null) {
+            return pointer.getLocation();
+        }
+        return new Point(event.getX(), event.getY());
     }
 
     private Rectangle usableScreenBounds(int x, int y) {

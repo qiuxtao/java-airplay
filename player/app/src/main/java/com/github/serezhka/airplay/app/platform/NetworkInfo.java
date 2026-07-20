@@ -4,6 +4,7 @@ import java.net.Inet4Address;
 import java.net.NetworkInterface;
 import java.net.SocketException;
 import java.util.List;
+import java.util.Locale;
 
 public final class NetworkInfo {
 
@@ -15,7 +16,11 @@ public final class NetworkInfo {
             return NetworkInterface.networkInterfaces()
                     .filter(NetworkInfo::usable)
                     .flatMap(NetworkInterface::inetAddresses)
-                    .filter(address -> address instanceof Inet4Address && !address.isLoopbackAddress())
+                    .filter(address -> address instanceof Inet4Address
+                            && !address.isAnyLocalAddress()
+                            && !address.isLoopbackAddress()
+                            && !address.isLinkLocalAddress()
+                            && !isBenchmarkAddress((Inet4Address) address))
                     .map(address -> address.getHostAddress())
                     .distinct()
                     .sorted()
@@ -30,9 +35,26 @@ public final class NetworkInfo {
             return networkInterface.isUp()
                     && !networkInterface.isLoopback()
                     && !networkInterface.isPointToPoint()
-                    && networkInterface.supportsMulticast();
+                    && !networkInterface.isVirtual()
+                    && networkInterface.supportsMulticast()
+                    && !looksLikeVirtualAdapter(networkInterface);
         } catch (SocketException ignored) {
             return false;
         }
+    }
+
+    private static boolean looksLikeVirtualAdapter(NetworkInterface networkInterface) {
+        String description = (networkInterface.getName() + " " + networkInterface.getDisplayName())
+                .toLowerCase(Locale.ROOT);
+        return List.of("virtual", "vmware", "hyper-v", "vethernet", "wsl", "docker", "npcap",
+                        "zerotier", "tailscale", "tunnel", "vpn")
+                .stream()
+                .anyMatch(description::contains);
+    }
+
+    private static boolean isBenchmarkAddress(Inet4Address address) {
+        byte[] bytes = address.getAddress();
+        return Byte.toUnsignedInt(bytes[0]) == 198
+                && (Byte.toUnsignedInt(bytes[1]) == 18 || Byte.toUnsignedInt(bytes[1]) == 19);
     }
 }

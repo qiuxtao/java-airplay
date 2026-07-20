@@ -9,6 +9,7 @@ import org.freedesktop.gstreamer.Bus;
 import org.freedesktop.gstreamer.Caps;
 import org.freedesktop.gstreamer.Element;
 import org.freedesktop.gstreamer.Format;
+import org.freedesktop.gstreamer.FlowReturn;
 import org.freedesktop.gstreamer.Gst;
 import org.freedesktop.gstreamer.Pipeline;
 import org.freedesktop.gstreamer.Pad;
@@ -26,6 +27,9 @@ import java.util.concurrent.TimeUnit;
 
 @Slf4j
 public final class GstPlayer implements AirPlayConsumer, AutoCloseable {
+
+    private static final long VIDEO_QUEUE_BYTES = 4L * 1024 * 1024;
+    private static final long AUDIO_QUEUE_BYTES = 256L * 1024;
 
     private final Pipeline videoPipeline;
     private final Pipeline alacPipeline;
@@ -56,32 +60,41 @@ public final class GstPlayer implements AirPlayConsumer, AutoCloseable {
         Gst.init(Version.of(1, 20), "AirPlay Receiver");
 
         videoPipeline = (Pipeline) Gst.parseLaunch(
-                "appsrc name=video-source ! h264parse ! avdec_h264 ! videoconvert " +
-                        "! appsink name=video-sink sync=false max-buffers=2 drop=true");
+                "appsrc name=video-source max-bytes=" + VIDEO_QUEUE_BYTES
+                        + " max-buffers=12 block=false leaky-type=downstream "
+                        + "! h264parse ! avdec_h264 ! videoconvert "
+                        + "! appsink name=video-sink sync=false max-buffers=2 drop=true enable-last-sample=false");
         videoSource = (AppSrc) videoPipeline.getElementByName("video-source");
         configureSource(videoSource,
-                "video/x-h264,colorimetry=bt709,stream-format=(string)byte-stream,alignment=(string)au");
+                "video/x-h264,colorimetry=bt709,stream-format=(string)byte-stream,alignment=(string)au",
+                VIDEO_QUEUE_BYTES);
         videoSink = (AppSink) videoPipeline.getElementByName("video-sink");
         videoSinkPad = videoSink.getStaticPad("sink");
         videoComponent = new GstVideoComponent(videoSink);
         videoComponent.setKeepAspect(true);
 
         alacPipeline = (Pipeline) Gst.parseLaunch(
-                "appsrc name=alac-source ! avdec_alac ! audioconvert ! audioresample " +
+                "appsrc name=alac-source max-bytes=" + AUDIO_QUEUE_BYTES
+                        + " max-buffers=128 block=false leaky-type=downstream "
+                        + "! avdec_alac ! audioconvert ! audioresample " +
                         "! volume name=alac-volume ! autoaudiosink sync=false");
         alacSource = (AppSrc) alacPipeline.getElementByName("alac-source");
         configureSource(alacSource,
                 "audio/x-alac,mpegversion=(int)4,channels=(int)2,rate=(int)44100," +
-                        "stream-format=raw,codec_data=(buffer)00000024616c616300000000000001600010280a0e0200ff00000000000000000000ac44");
+                        "stream-format=raw,codec_data=(buffer)00000024616c616300000000000001600010280a0e0200ff00000000000000000000ac44",
+                AUDIO_QUEUE_BYTES);
         alacVolume = alacPipeline.getElementByName("alac-volume");
 
         aacEldPipeline = (Pipeline) Gst.parseLaunch(
-                "appsrc name=aac-eld-source ! avdec_aac ! audioconvert ! audioresample " +
+                "appsrc name=aac-eld-source max-bytes=" + AUDIO_QUEUE_BYTES
+                        + " max-buffers=128 block=false leaky-type=downstream "
+                        + "! avdec_aac ! audioconvert ! audioresample " +
                         "! volume name=aac-eld-volume ! autoaudiosink sync=false");
         aacEldSource = (AppSrc) aacEldPipeline.getElementByName("aac-eld-source");
         configureSource(aacEldSource,
                 "audio/mpeg,mpegversion=(int)4,channels=(int)2,rate=(int)44100," +
-                        "stream-format=raw,codec_data=(buffer)f8e85000");
+                        "stream-format=raw,codec_data=(buffer)f8e85000",
+                AUDIO_QUEUE_BYTES);
         aacEldVolume = aacEldPipeline.getElementByName("aac-eld-volume");
 
         attachBusHandlers(videoPipeline);
@@ -135,7 +148,7 @@ public final class GstPlayer implements AirPlayConsumer, AutoCloseable {
 
     @Override
     public synchronized void onVideoSrcDisconnect() {
-        videoPipeline.stop();
+        stopPipeline(videoPipeline);
         lastWidth = 0;
         lastHeight = 0;
     }
@@ -164,8 +177,8 @@ public final class GstPlayer implements AirPlayConsumer, AutoCloseable {
 
     @Override
     public synchronized void onAudioSrcDisconnect() {
-        alacPipeline.stop();
-        aacEldPipeline.stop();
+        stopPipeline(alacPipeline);
+        stopPipeline(aacEldPipeline);
         audioCompressionType = null;
     }
 
@@ -185,12 +198,13 @@ public final class GstPlayer implements AirPlayConsumer, AutoCloseable {
         videoSinkPad.dispose();
     }
 
-    private void configureSource(AppSrc source, String caps) {
+    private void configureSource(AppSrc source, String caps, long maxBytes) {
         source.setStreamType(AppSrc.StreamType.STREAM);
         source.setCaps(Caps.fromString(caps));
+        source.setMaxBytes(maxBytes);
         source.set("is-live", true);
         source.set("format", Format.TIME);
-        source.set("emit-signals", true);
+        source.set("emit-signals", false);
     }
 
     private void attachBusHandlers(Pipeline pipeline) {
@@ -210,11 +224,26 @@ public final class GstPlayer implements AirPlayConsumer, AutoCloseable {
     private void push(AppSrc source, byte[] bytes) {
         Buffer buffer = new Buffer(bytes.length);
         try {
-            buffer.map(true).put(bytes);
-        } finally {
-            buffer.unmap();
+            try {
+                buffer.map(true).put(bytes);
+            } finally {
+                buffer.unmap();
+            }
+            FlowReturn result = source.pushBuffer(buffer);
+            // gst_app_src_push_buffer takes ownership for every returned flow status.
+            buffer.disown();
+            if (result != FlowReturn.OK && result != FlowReturn.FLUSHING) {
+                log.debug("GStreamer rejected an input buffer with status {}", result);
+            }
+        } catch (RuntimeException error) {
+            buffer.dispose();
+            throw error;
         }
-        source.pushBuffer(buffer);
+    }
+
+    private void stopPipeline(Pipeline pipeline) {
+        pipeline.stop();
+        pipeline.getState(750, TimeUnit.MILLISECONDS);
     }
 
     static double normalizeVolume(double value) {
