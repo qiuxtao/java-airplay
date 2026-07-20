@@ -311,20 +311,25 @@ public final class GstPlayer implements AirPlayConsumer, AutoCloseable {
 
     private void push(AppSrc source, byte[] bytes) {
         Buffer buffer = new Buffer(bytes.length);
+        boolean ownershipTransferred = false;
         try {
             try {
                 buffer.map(true).put(bytes);
             } finally {
                 buffer.unmap();
             }
+            // gst1-java marks gst_app_src_push_buffer's Buffer argument with @Invalidate.
+            // The binding invalidates this wrapper when native ownership transfers, so it
+            // must not be disposed or disowned after this call.
+            ownershipTransferred = true;
             FlowReturn result = source.pushBuffer(buffer);
-            // gst_app_src_push_buffer takes ownership for every returned flow status.
-            buffer.disown();
             if (result != FlowReturn.OK && result != FlowReturn.FLUSHING) {
                 log.debug("GStreamer rejected an input buffer with status {}", result);
             }
         } catch (RuntimeException error) {
-            buffer.dispose();
+            if (!ownershipTransferred) {
+                buffer.dispose();
+            }
             throw error;
         }
     }
