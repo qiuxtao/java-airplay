@@ -4,6 +4,7 @@ import com.formdev.flatlaf.FlatClientProperties;
 import com.formdev.flatlaf.extras.FlatSVGIcon;
 import com.github.serezhka.airplay.app.ReceiverController;
 import com.github.serezhka.airplay.app.i18n.I18n;
+import com.github.serezhka.airplay.app.platform.WindowsAspectRatioResizer;
 import com.github.serezhka.airplay.app.settings.AppSettings;
 import com.github.serezhka.airplay.server.SessionInfo;
 
@@ -17,15 +18,12 @@ import javax.swing.JRootPane;
 import javax.swing.JSlider;
 import javax.swing.JToggleButton;
 import javax.swing.SwingConstants;
-import javax.swing.Timer;
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.GraphicsConfiguration;
 import java.awt.Rectangle;
-import java.awt.event.ComponentAdapter;
-import java.awt.event.ComponentEvent;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 
@@ -45,24 +43,19 @@ final class PlaybackWindow extends JFrame {
     private final JToggleButton muteButton = toggleButton("icons/volume.svg", 17);
     private final JToggleButton alwaysOnTopButton = toggleButton("icons/pin.svg", 17);
     private final JSlider volume;
-    private final Timer aspectTimer;
+    private WindowsAspectRatioResizer aspectResizer;
 
     private boolean activeSession;
     private boolean disconnectRequested;
-    private boolean adjustingAspect;
     private String sessionAddress;
     private int sourceWidth;
     private int sourceHeight;
-    private Dimension lastAcceptedVideoSize;
 
     PlaybackWindow(ReceiverController controller, I18n i18n) {
         super("AirPlay Receiver");
         this.controller = controller;
         this.i18n = i18n;
         this.volume = new JSlider(0, 100, (int) Math.round(controller.settings().volume() * 100));
-        this.aspectTimer = new Timer(180, event -> enforceAspectRatio());
-        aspectTimer.setRepeats(false);
-
         setDefaultCloseOperation(DO_NOTHING_ON_CLOSE);
         setMinimumSize(FALLBACK_MINIMUM_SIZE);
         setSize(980, 640);
@@ -85,6 +78,7 @@ final class PlaybackWindow extends JFrame {
             setVisible(true);
             setAutoRequestFocus(true);
         }
+        ensureAspectResizer();
         if (settings.bringToFront()) {
             setExtendedState(getExtendedState() & ~ICONIFIED);
             toFront();
@@ -98,9 +92,10 @@ final class PlaybackWindow extends JFrame {
         sessionAddress = null;
         sourceWidth = 0;
         sourceHeight = 0;
-        lastAcceptedVideoSize = null;
         formatLabel.setText("—");
-        aspectTimer.stop();
+        if (aspectResizer != null) {
+            aspectResizer.clearVideoFormat();
+        }
         setMinimumSize(FALLBACK_MINIMUM_SIZE);
         setVisible(false);
     }
@@ -115,6 +110,7 @@ final class PlaybackWindow extends JFrame {
         if ((getExtendedState() & MAXIMIZED_BOTH) == 0) {
             fitWindowToVideo(width, height);
         }
+        updateAspectResizer();
     }
 
     void refreshTexts() {
@@ -127,7 +123,10 @@ final class PlaybackWindow extends JFrame {
     }
 
     void closeWindow() {
-        aspectTimer.stop();
+        if (aspectResizer != null) {
+            aspectResizer.close();
+            aspectResizer = null;
+        }
         dispose();
     }
 
@@ -185,16 +184,6 @@ final class PlaybackWindow extends JFrame {
                 }
             }
         });
-
-        addComponentListener(new ComponentAdapter() {
-            @Override
-            public void componentResized(ComponentEvent event) {
-                if (!adjustingAspect && sourceWidth > 0 && sourceHeight > 0
-                        && (getExtendedState() & MAXIMIZED_BOTH) == 0) {
-                    aspectTimer.restart();
-                }
-            }
-        });
     }
 
     private void requestDisconnect() {
@@ -234,35 +223,23 @@ final class PlaybackWindow extends JFrame {
         applyVideoSize(target, true);
     }
 
-    private void enforceAspectRatio() {
-        if (sourceWidth <= 0 || sourceHeight <= 0
-                || (getExtendedState() & MAXIMIZED_BOTH) != 0 || adjustingAspect) {
-            return;
+    private void applyVideoSize(Dimension videoSize, boolean recenter) {
+        setSize(videoSize.width + chromeWidth(), videoSize.height + chromeHeight());
+        if (recenter) {
+            setLocationRelativeTo(null);
         }
-        Dimension current = player.getSize();
-        if (current.width <= 0 || current.height <= 0) {
-            return;
-        }
-        if (Math.abs((double) current.width / current.height - (double) sourceWidth / sourceHeight) < 0.002) {
-            lastAcceptedVideoSize = current;
-            return;
-        }
-        Dimension previous = lastAcceptedVideoSize == null ? current : lastAcceptedVideoSize;
-        Dimension constrained = constrainVideoSize(
-                sourceWidth, sourceHeight, current.width, current.height, previous.width, previous.height);
-        applyVideoSize(constrained, false);
     }
 
-    private void applyVideoSize(Dimension videoSize, boolean recenter) {
-        adjustingAspect = true;
-        try {
-            setSize(videoSize.width + chromeWidth(), videoSize.height + chromeHeight());
-            lastAcceptedVideoSize = new Dimension(videoSize);
-            if (recenter) {
-                setLocationRelativeTo(null);
-            }
-        } finally {
-            adjustingAspect = false;
+    private void ensureAspectResizer() {
+        if (aspectResizer == null) {
+            aspectResizer = WindowsAspectRatioResizer.install(this);
+        }
+        updateAspectResizer();
+    }
+
+    private void updateAspectResizer() {
+        if (aspectResizer != null && sourceWidth > 0 && sourceHeight > 0) {
+            aspectResizer.setVideoFormat(sourceWidth, sourceHeight, chromeWidth(), chromeHeight(), getMinimumSize());
         }
     }
 
@@ -306,23 +283,6 @@ final class PlaybackWindow extends JFrame {
         return measured > 0
                 ? measured
                 : getInsets().top + getInsets().bottom + titleControls.getPreferredSize().height;
-    }
-
-    static Dimension constrainVideoSize(int sourceWidth,
-                                        int sourceHeight,
-                                        int currentWidth,
-                                        int currentHeight,
-                                        int previousWidth,
-                                        int previousHeight) {
-        double aspect = (double) sourceWidth / sourceHeight;
-        double widthChange = Math.abs(currentWidth - previousWidth) / (double) Math.max(1, previousWidth);
-        double heightChange = Math.abs(currentHeight - previousHeight) / (double) Math.max(1, previousHeight);
-        if (widthChange >= heightChange) {
-            return new Dimension(Math.max(1, currentWidth),
-                    Math.max(1, (int) Math.round(currentWidth / aspect)));
-        }
-        return new Dimension(Math.max(1, (int) Math.round(currentHeight * aspect)),
-                Math.max(1, currentHeight));
     }
 
     private static JToggleButton toggleButton(String icon, int size) {

@@ -53,48 +53,42 @@ public class AudioStreamInfo implements MediaStreamInfo {
     }
 
     public enum AudioFormat {
-        PCM_8000_16_1(0x4, 8000, 16, 1),
-        PCM_8000_16_2(0x8, 8000, 16, 2),
-        PCM_16000_16_1(0x10, 16000, 16, 1),
-        PCM_16000_16_2(0x20, 16000, 16, 2),
-        PCM_24000_16_1(0x40, 24000, 16, 1),
-        PCM_24000_16_2(0x80, 24000, 16, 2),
-        PCM_32000_16_1(0x100, 32000, 16, 1),
-        PCM_32000_16_2(0x200, 32000, 16, 2),
-        PCM_44100_16_1(0x400, 44100, 16, 1),
-        PCM_44100_16_2(0x800, 44100, 16, 2),
-        PCM_44100_24_1(0x1000, 44100, 24, 1),
-        PCM_44100_24_2(0x2000, 44100, 24, 2),
-        PCM_48000_16_1(0x4000, 48000, 16, 1),
-        PCM_48000_16_2(0x8000, 48000, 16, 2),
-        PCM_48000_24_1(0x10000, 48000, 24, 1),
-        PCM_48000_24_2(0x20000, 48000, 24, 2),
-        ALAC_44100_16_2(0x40000, 44100, 16, 2),
-        ALAC_44100_24_2(0x80000, 44100, 24, 2),
-        ALAC_48000_16_2(0x100000, 48000, 16, 2),
-        ALAC_48000_24_2(0x200000, 48000, 24, 2),
-        AAC_LC_44100_2(0x400000, 44100, 16, 2),
-        AAC_LC_48000_2(0x800000, 48000, 16, 2),
-        AAC_ELD_44100_2(0x1000000, 44100, 16, 2),
-        AAC_ELD_48000_2(0x2000000, 48000, 16, 2),
-        AAC_ELD_16000_1(0x4000000, 16000, 16, 1),
-        AAC_ELD_24000_1(0x8000000, 24000, 16, 1),
-        OPUS_16000_1(0x10000000, 16000, 16, 1),
-        OPUS_24000_1(0x20000000, 24000, 16, 1),
-        OPUS_48000_1(0x40000000, 48000, 16, 1),
-        AAC_ELD_44100_1(0x80000000L, 44100, 16, 1),
-        AAC_ELD_48000_1(0x100000000L, 48000, 16, 1);
+        PCM_8000_16_1(0x4),
+        PCM_8000_16_2(0x8),
+        PCM_16000_16_1(0x10),
+        PCM_16000_16_2(0x20),
+        PCM_24000_16_1(0x40),
+        PCM_24000_16_2(0x80),
+        PCM_32000_16_1(0x100),
+        PCM_32000_16_2(0x200),
+        PCM_44100_16_1(0x400),
+        PCM_44100_16_2(0x800),
+        PCM_44100_24_1(0x1000),
+        PCM_44100_24_2(0x2000),
+        PCM_48000_16_1(0x4000),
+        PCM_48000_16_2(0x8000),
+        PCM_48000_24_1(0x10000),
+        PCM_48000_24_2(0x20000),
+        ALAC_44100_16_2(0x40000),
+        ALAC_44100_24_2(0x80000),
+        ALAC_48000_16_2(0x100000),
+        ALAC_48000_24_2(0x200000),
+        AAC_LC_44100_2(0x400000),
+        AAC_LC_48000_2(0x800000),
+        AAC_ELD_44100_2(0x1000000),
+        AAC_ELD_48000_2(0x2000000),
+        AAC_ELD_16000_1(0x4000000),
+        AAC_ELD_24000_1(0x8000000),
+        OPUS_16000_1(0x10000000),
+        OPUS_24000_1(0x20000000),
+        OPUS_48000_1(0x40000000),
+        AAC_ELD_44100_1(0x80000000L),
+        AAC_ELD_48000_1(0x100000000L);
 
         private final long code;
-        private final int sampleRate;
-        private final int sampleSize;
-        private final int channels;
 
-        AudioFormat(long code, int sampleRate, int sampleSize, int channels) {
+        AudioFormat(long code) {
             this.code = code;
-            this.sampleRate = sampleRate;
-            this.sampleSize = sampleSize;
-            this.channels = channels;
         }
 
         public static AudioFormat fromCode(long code) {
@@ -106,17 +100,6 @@ public class AudioStreamInfo implements MediaStreamInfo {
             throw new IllegalArgumentException("Unknown audio format with code: " + code);
         }
 
-        public int getSampleRate() {
-            return sampleRate;
-        }
-
-        public int getSampleSize() {
-            return sampleSize;
-        }
-
-        public int getChannels() {
-            return channels;
-        }
     }
 
     public static final class AudioStreamInfoBuilder {

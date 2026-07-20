@@ -89,9 +89,7 @@ final class TrayController implements AutoCloseable {
         if (trayIcon == null) {
             return;
         }
-        String stateText = playing
-                ? i18n.text("state.playing")
-                : i18n.text("state." + state.name().toLowerCase());
+        String stateText = StatusText.resolve(i18n, state, playing);
         stateLabel.setText(i18n.text("tray.status", stateText));
     }
 

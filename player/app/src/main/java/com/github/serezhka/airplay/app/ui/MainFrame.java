@@ -47,7 +47,6 @@ public final class MainFrame extends JFrame implements ReceiverView {
     private final ReceiverController controller;
     private final I18n i18n;
     private final PlaybackWindow playbackWindow;
-    private final JLabel statusLabel = new JLabel();
     private final JLabel waitingTitle = heading(22, Font.BOLD);
     private final JTextArea waitingSubtitle = textArea(15f);
     private final JLabel receiverCaption = new JLabel();
@@ -90,7 +89,7 @@ public final class MainFrame extends JFrame implements ReceiverView {
     @Override
     public void onServerState(ServerState state) {
         serverState = state;
-        refreshStatus();
+        refreshHero();
         tray.update(state, playing);
         if (state == ServerState.READY) {
             hideError();
@@ -101,7 +100,6 @@ public final class MainFrame extends JFrame implements ReceiverView {
     public void onSessionStarted(SessionInfo session) {
         playing = true;
         refreshHero();
-        refreshStatus();
         tray.update(serverState, true);
         playbackWindow.showSession(session, settings);
     }
@@ -110,7 +108,6 @@ public final class MainFrame extends JFrame implements ReceiverView {
     public void onSessionStopped() {
         playing = false;
         refreshHero();
-        refreshStatus();
         tray.update(serverState, false);
         playbackWindow.endSession();
     }
@@ -208,8 +205,6 @@ public final class MainFrame extends JFrame implements ReceiverView {
 
         JPanel actions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
         actions.setOpaque(false);
-        statusLabel.setBorder(BorderFactory.createEmptyBorder(7, 13, 7, 13));
-        actions.add(statusLabel);
         logsButton.addActionListener(event -> WindowsIntegration.openDirectory(AppPaths.logsDirectory()));
         actions.add(logsButton);
         settingsButton.addActionListener(event -> new SettingsDialog(this, i18n)
@@ -362,33 +357,24 @@ public final class MainFrame extends JFrame implements ReceiverView {
         logsButton.setToolTipText(i18n.text("action.logs"));
         settingsButton.setToolTipText(i18n.text("settings.title"));
         firewallButton.setText(i18n.text("action.firewall"));
-        refreshStatus();
-
         receiverCaption.setText(i18n.text("home.receiverName"));
     }
 
     private void refreshHero() {
         receiverName.setText(settings.receiverName());
         receiverName.setToolTipText(settings.receiverName());
+        waitingTitle.setText(StatusText.resolve(i18n, serverState, playing));
         if (playing) {
-            waitingTitle.setText(i18n.text("home.castingTitle"));
             waitingSubtitle.setText(i18n.text("home.castingSubtitle"));
-        } else {
-            waitingTitle.setText(i18n.text("home.readyTitle"));
-            waitingSubtitle.setText(i18n.text("home.readySubtitle", settings.receiverName()));
+            return;
         }
-    }
-
-    private void refreshStatus() {
-        statusLabel.setVisible(playing || serverState != ServerState.READY);
-        if (playing) {
-            statusLabel.setText(i18n.text("state.playing"));
-            statusLabel.putClientProperty("FlatLaf.style",
-                    "arc: 999; background: fade(#536dfe,20%); foreground: #7085ff");
-        } else {
-            statusLabel.setText(i18n.text("state." + serverState.name().toLowerCase()));
-            statusLabel.putClientProperty("FlatLaf.style", statusStyle(serverState));
-        }
+        waitingSubtitle.setText(switch (serverState) {
+            case STARTING -> i18n.text("home.startingSubtitle");
+            case READY -> i18n.text("home.readySubtitle", settings.receiverName());
+            case STOPPING -> i18n.text("home.stoppingSubtitle");
+            case STOPPED -> i18n.text("home.stoppedSubtitle");
+            case FAILED -> i18n.text("home.failedSubtitle");
+        });
     }
 
     private String displayDescription(AppSettings appSettings) {
@@ -489,15 +475,6 @@ public final class MainFrame extends JFrame implements ReceiverView {
             public int getIconHeight() {
                 return 28;
             }
-        };
-    }
-
-    private String statusStyle(ServerState state) {
-        return switch (state) {
-            case READY -> "arc: 999; background: fade(#22a06b,18%); foreground: #22a06b";
-            case FAILED -> "arc: 999; background: fade(#d84d4d,18%); foreground: #d84d4d";
-            case STARTING, STOPPING -> "arc: 999; background: fade(#e39b24,18%); foreground: #c88413";
-            case STOPPED -> "arc: 999; background: fade(#7a8190,16%); foreground: #7a8190";
         };
     }
 

@@ -77,13 +77,6 @@ public final class GstRuntime {
                     }
                 }
             }
-            if (Platform.isWindows()) {
-                try (ElementFactory factory = ElementFactory.find("wasapi2sink")) {
-                    if (factory == null) {
-                        problems.add("Missing GStreamer element: wasapi2sink");
-                    }
-                }
-            }
         } catch (RuntimeException | LinkageError error) {
             problems.add("GStreamer could not initialize: " + error.getMessage());
         }
