@@ -37,6 +37,7 @@ public final class ReceiverController implements AutoCloseable {
     private volatile ReceiverView view;
     private volatile AirPlayServer server;
     private volatile boolean pendingRestart;
+    private volatile String displayedSessionId;
 
     public ReceiverController(SettingsStore settingsStore, AppSettings settings, ThemeManager themeManager) {
         this.settingsStore = settingsStore;
@@ -83,22 +84,7 @@ public final class ReceiverController implements AutoCloseable {
     }
 
     public void start() {
-        if (settings.receiverEnabled()) {
-            startReceiver();
-        }
-    }
-
-    public void setReceiverEnabled(boolean enabled) {
-        AppSettings updated = settings.withReceiverEnabled(enabled);
-        settings = updated;
-        settingsStore.save(updated);
-        if (enabled) {
-            startReceiver();
-        } else {
-            pendingRestart = false;
-            stopReceiver();
-        }
-        onEdt(receiverView -> receiverView.onSettingsChanged(updated));
+        startReceiver();
     }
 
     public void updateSettings(AppSettings updated) {
@@ -116,15 +102,10 @@ public final class ReceiverController implements AutoCloseable {
         onEdt(receiverView -> receiverView.onSettingsChanged(normalized));
 
         if (!serverSettingsEqual(previous, normalized)) {
-            if (normalized.receiverEnabled() && server.activeSession().isPresent()) {
+            if (server.activeSession().isPresent()) {
                 pendingRestart = true;
-            } else if (normalized.receiverEnabled()) {
-                restartReceiver();
             } else {
-                worker.execute(() -> {
-                    server.close();
-                    server = createServer(settings);
-                });
+                restartReceiver();
             }
         }
     }
@@ -159,10 +140,6 @@ public final class ReceiverController implements AutoCloseable {
         });
     }
 
-    public void stopReceiver() {
-        worker.execute(server::stop);
-    }
-
     public void restartReceiver() {
         worker.execute(() -> {
             try {
@@ -193,10 +170,16 @@ public final class ReceiverController implements AutoCloseable {
             @Override
             public void onSessionChanged(SessionInfo session, SessionState state) {
                 if (state == SessionState.PLAYING) {
-                    onEdt(receiverView -> receiverView.onSessionStarted(session));
+                    if (!session.id().equals(displayedSessionId)) {
+                        displayedSessionId = session.id();
+                        onEdt(receiverView -> receiverView.onSessionStarted(session));
+                    }
                 } else if (state == SessionState.STOPPED) {
-                    onEdt(ReceiverView::onSessionStopped);
-                    if (pendingRestart && settings.receiverEnabled()) {
+                    if (session.id().equals(displayedSessionId)) {
+                        displayedSessionId = null;
+                        onEdt(ReceiverView::onSessionStopped);
+                    }
+                    if (pendingRestart && server.activeSession().isEmpty()) {
                         restartReceiver();
                     }
                 }

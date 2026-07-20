@@ -63,7 +63,7 @@ class SettingsStoreTest {
     @Test
     void normalizesUnsafeValues() {
         AppSettings settings = new AppSettings(" ", null, 1, 10000, 120,
-                null, null, false, true, true, true, 5);
+                null, null, false, true, true, false, 5);
 
         AppSettings normalized = settings.normalized();
 
@@ -71,6 +71,7 @@ class SettingsStoreTest {
         assertThat(normalized.customWidth()).isEqualTo(640);
         assertThat(normalized.customHeight()).isEqualTo(4320);
         assertThat(normalized.maxFps()).isEqualTo(60);
+        assertThat(normalized.receiverEnabled()).isTrue();
         assertThat(normalized.volume()).isEqualTo(1);
     }
 }

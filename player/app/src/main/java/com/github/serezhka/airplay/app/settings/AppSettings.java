@@ -36,13 +36,8 @@ public record AppSettings(String receiverName,
                 clamp(maxFps, 15, 60),
                 theme == null ? ThemeMode.SYSTEM : theme,
                 language == null ? LanguageMode.SYSTEM : language,
-                startWithWindows, bringToFront, closeToTray, receiverEnabled,
+                startWithWindows, bringToFront, closeToTray, true,
                 Math.max(0, Math.min(1, volume)));
-    }
-
-    public AppSettings withReceiverEnabled(boolean enabled) {
-        return new AppSettings(receiverName, displayMode, customWidth, customHeight, maxFps,
-                theme, language, startWithWindows, bringToFront, closeToTray, enabled, volume);
     }
 
     public AppSettings withVolume(double newVolume) {

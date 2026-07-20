@@ -48,7 +48,7 @@ final class SettingsDialog extends JDialog {
         super(owner, true);
         this.i18n = i18n;
         setTitle(i18n.text("settings.title"));
-        setMinimumSize(new Dimension(560, 560));
+        setMinimumSize(new Dimension(680, 590));
         setLocationRelativeTo(owner);
         buildUi();
     }
@@ -164,7 +164,7 @@ final class SettingsDialog extends JDialog {
                 (AppSettings.ThemeMode) theme.getSelectedItem(),
                 (AppSettings.LanguageMode) language.getSelectedItem(),
                 startWithWindows.isSelected(), bringToFront.isSelected(), closeToTray.isSelected(),
-                original.receiverEnabled(), original.volume()).normalized();
+                true, original.volume()).normalized();
     }
 
     private <T extends Enum<T>> void installLocalizedRenderer(JComboBox<T> comboBox, String prefix) {

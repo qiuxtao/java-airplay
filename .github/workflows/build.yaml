@@ -61,6 +61,29 @@ jobs:
         run: |
           .\gradlew.bat test :player:app:stageGStreamerRuntime --console=plain
           if ($LASTEXITCODE -ne 0) { throw "Gradle test/stage failed with exit code $LASTEXITCODE" }
+          $runtimeFiles = Get-ChildItem '.\player\app\build\package\staged-image\AirPlay Receiver\gstreamer' -File -Recurse
+          $runtimeBytes = ($runtimeFiles | Measure-Object -Property Length -Sum).Sum
+          "Pruned GStreamer runtime: $($runtimeFiles.Count) files, $([math]::Round($runtimeBytes / 1MB, 1)) MiB" | Write-Host
+          if ($runtimeBytes -gt 80MB) { throw 'Pruned GStreamer runtime exceeded the 80 MiB packaging limit' }
+      - name: Verify pruned media runtime
+        shell: pwsh
+        run: |
+          $gstRoot = (Resolve-Path '.\player\app\build\package\staged-image\AirPlay Receiver\gstreamer').Path
+          $env:PATH = "$gstRoot\bin;$env:PATH"
+          $env:GST_PLUGIN_PATH = "$gstRoot\lib\gstreamer-1.0"
+          $env:GST_PLUGIN_PATH_1_0 = $env:GST_PLUGIN_PATH
+          $env:GST_REGISTRY_1_0 = Join-Path $env:RUNNER_TEMP 'airplay-pruned-gstreamer-registry.bin'
+          $elements = @(
+            'appsrc', 'appsink', 'h264parse', 'avdec_h264', 'videoconvert',
+            'avdec_alac', 'avdec_aac', 'audioconvert', 'audioresample',
+            'volume', 'autoaudiosink', 'wasapisink', 'wasapi2sink'
+          )
+          foreach ($element in $elements) {
+            $inspection = & "$gstRoot\bin\gst-inspect-1.0.exe" $element 2>&1
+            if ($LASTEXITCODE -ne 0) {
+              throw "GStreamer element '$element' failed to load: $($inspection -join [Environment]::NewLine)"
+            }
+          }
       - name: Verify app image
         shell: pwsh
         run: |
@@ -78,12 +101,14 @@ jobs:
           $installers = @(Get-ChildItem '.\player\app\build\package\installer\*.exe')
           if ($installers.Count -ne 1) { throw "Expected one Windows installer, found $($installers.Count)" }
           $installer = $installers[0]
+          "Windows installer: $([math]::Round($installer.Length / 1MB, 1)) MiB" | Write-Host
+          if ($installer.Length -gt 300MB) { throw 'Windows installer exceeded the 300 MiB packaging limit' }
           $install = Start-Process -FilePath $installer.FullName -Wait -PassThru -ArgumentList '/quiet','/norestart'
           if ($install.ExitCode -ne 0) { throw "Installer smoke test failed with exit code $($install.ExitCode)" }
       - name: Verify installed application
         shell: pwsh
         run: |
-          $installedApp = Join-Path $env:LOCALAPPDATA 'AirPlay Receiver\AirPlay Receiver.exe'
+          $installedApp = Join-Path $env:LOCALAPPDATA 'AirPlay Receiver App\AirPlay Receiver.exe'
           if (!(Test-Path $installedApp)) { throw "Installed application not found at $installedApp" }
           $installedSelfTest = Start-Process -FilePath $installedApp -Wait -PassThru -ArgumentList '--self-test'
           if ($installedSelfTest.ExitCode -ne 0) { throw "Installed self-test failed with exit code $($installedSelfTest.ExitCode)" }

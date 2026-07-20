@@ -13,6 +13,11 @@ Download the Windows x64 installer from the latest workflow or release and run
 it normally. The installer contains both Java and a private GStreamer runtime;
 users do not need to install either dependency.
 
+The packaged runtime is deliberately trimmed to the plug-ins and native DLLs
+used for H.264 screen mirroring, ALAC/AAC-ELD audio, format conversion, volume,
+and Windows audio output. Development headers, static libraries, tools, and
+unrelated plug-ins from the full GStreamer SDK are not installed.
+
 On first launch, allow AirPlay Receiver through Windows Defender Firewall on
 private networks. Keep the PC and Apple device on the same Wi-Fi or Ethernet
 network.
@@ -24,9 +29,15 @@ network.
    On macOS, use Control Center → **Screen Mirroring**.
 3. Select the receiver name shown in the application.
 
+Receiving starts automatically with the application; there is no separate
+service switch to manage. When a device connects, its mirrored screen opens in
+a dedicated playback window while the main window remains a compact receiver
+control center.
+
 The receiver advertises the primary Windows display as its maximum capability,
 then preserves the source device's real aspect ratio and orientation. The
-player includes full screen, volume/mute, always-on-top, and stop controls.
+dedicated player includes full screen, volume/mute, always-on-top, and stop
+controls.
 
 This release intentionally focuses on live screen mirroring and its audio. It
 does not promise media-URL/HLS casting, recording, screenshots, PIN pairing, or
@@ -75,6 +86,10 @@ $env:GSTREAMER_RUNTIME_DIR='C:\path\to\gstreamer'
 ```
 
 The output is written to `player/app/build/package/installer`.
+The staging task selects the required runtime dependency closure, preserves
+upstream license notices, and fails if the private GStreamer payload exceeds
+80 MiB. CI also rejects an installer larger than 300 MiB and runs `--self-test`
+both before and after installation to verify all required elements can load.
 Import a signing certificate into the Windows certificate store and set
 `WINDOWS_SIGNING_KEY_USER` to its subject name to sign with `signtool`.
 `WINDOWS_SIGNTOOL` and `WINDOWS_TIMESTAMP_URL` can override their defaults.

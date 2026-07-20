@@ -15,71 +15,49 @@ import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
 import javax.swing.JButton;
-import javax.swing.JCheckBox;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
-import javax.swing.JSlider;
-import javax.swing.JToggleButton;
+import javax.swing.JTextArea;
 import javax.swing.SwingConstants;
-import javax.swing.SwingUtilities;
-import javax.swing.Timer;
 import java.awt.BorderLayout;
-import java.awt.CardLayout;
 import java.awt.Color;
 import java.awt.Cursor;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Font;
-import java.awt.GraphicsDevice;
 import java.awt.GraphicsEnvironment;
-import java.awt.GridLayout;
-import java.awt.event.MouseAdapter;
-import java.awt.event.MouseEvent;
+import java.awt.GridBagConstraints;
+import java.awt.GridBagLayout;
+import java.awt.Insets;
 import java.util.List;
 
 public final class MainFrame extends JFrame implements ReceiverView {
 
-    private static final String IDLE = "idle";
-    private static final String PLAYER = "player";
-
     private final ReceiverController controller;
     private final I18n i18n;
-    private final CardLayout cardLayout = new CardLayout();
-    private final JPanel cards = new JPanel(cardLayout);
-    private final JLabel pageTitle = heading(25, Font.BOLD);
+    private final PlaybackWindow playbackWindow;
     private final JLabel statusLabel = new JLabel();
-    private final JToggleButton receiverToggle = new JToggleButton();
-    private final JLabel receiverName = heading(28, Font.BOLD);
-    private final JLabel waitingTitle = heading(20, Font.BOLD);
-    private final JLabel waitingSubtitle = new JLabel();
-    private final JLabel instructionsTitle = heading(17, Font.BOLD);
-    private final JLabel[] instructionSteps = {new JLabel(), new JLabel(), new JLabel()};
-    private final JLabel deviceInfoTitle = heading(17, Font.BOLD);
+    private final JLabel waitingTitle = heading(22, Font.BOLD);
+    private final JTextArea waitingSubtitle = textArea(15f);
+    private final JLabel receiverCaption = new JLabel();
+    private final JTextArea receiverName = textArea(28f, Font.BOLD);
+    private final JLabel instructionsTitle = heading(18, Font.BOLD);
+    private final JTextArea[] instructionSteps = {textArea(14f), textArea(14f), textArea(14f)};
+    private final JLabel deviceInfoTitle = heading(18, Font.BOLD);
     private final JLabel networkTitle = new JLabel();
     private final JLabel capabilityTitle = new JLabel();
     private final JLabel trustedNetworkLabel = new JLabel();
-    private final JLabel networkValue = new JLabel();
-    private final JLabel resolutionValue = new JLabel();
-    private final JLabel languageHint = new JLabel();
-    private final JLabel sessionLabel = new JLabel();
-    private final JLabel formatLabel = new JLabel("—");
+    private final JTextArea networkValue = textArea(14f);
+    private final JTextArea resolutionValue = textArea(14f);
     private final JPanel errorBanner = new JPanel(new BorderLayout(12, 0));
     private final JLabel errorLabel = new JLabel();
-    private final JPanel controls = new JPanel(new FlowLayout(FlowLayout.CENTER, 10, 9));
-    private final Timer hideControlsTimer;
-    private final JToggleButton muteButton = iconToggle("icons/volume.svg", 18);
-    private final JCheckBox alwaysOnTop = new JCheckBox();
     private final JButton settingsButton = iconButton("icons/settings.svg", 18);
-    private final JButton logsButton = iconButton("icons/logs.svg", 16);
+    private final JButton logsButton = iconButton("icons/logs.svg", 17);
     private final JButton firewallButton = new JButton();
-    private final JButton fullScreenButton = iconButton("icons/fullscreen.svg", 18);
-    private final JButton stopButton = new JButton(new FlatSVGIcon("icons/stop.svg", 16, 16));
     private TrayController tray;
     private AppSettings settings;
-    private boolean fullScreen;
     private boolean playing;
-    private String sessionAddress;
     private ServerState serverState = ServerState.STOPPED;
 
     public MainFrame(ReceiverController controller, I18n i18n) {
@@ -87,25 +65,21 @@ public final class MainFrame extends JFrame implements ReceiverView {
         this.controller = controller;
         this.i18n = i18n;
         this.settings = controller.settings();
+        this.playbackWindow = new PlaybackWindow(controller, i18n);
         setDefaultCloseOperation(DO_NOTHING_ON_CLOSE);
-        setMinimumSize(new Dimension(860, 600));
-        setSize(1080, 720);
+        setMinimumSize(new Dimension(900, 620));
+        setSize(1040, 720);
         setLocationRelativeTo(null);
         buildUi();
-        hideControlsTimer = new Timer(3000, event -> controls.setVisible(false));
-        hideControlsTimer.setRepeats(false);
         installWindowBehavior();
         refreshTexts();
-        tray = new TrayController(this, controller, i18n);
+        tray = new TrayController(this, i18n);
     }
 
     @Override
     public void onServerState(ServerState state) {
         serverState = state;
-        statusLabel.setText(i18n.text("state." + state.name().toLowerCase()));
-        statusLabel.putClientProperty("FlatLaf.style", statusStyle(state));
-        receiverToggle.setSelected(state == ServerState.READY || state == ServerState.STARTING);
-        receiverToggle.setEnabled(state != ServerState.STARTING && state != ServerState.STOPPING);
+        refreshStatus();
         tray.update(state);
         if (state == ServerState.READY) {
             hideError();
@@ -115,33 +89,20 @@ public final class MainFrame extends JFrame implements ReceiverView {
     @Override
     public void onSessionStarted(SessionInfo session) {
         playing = true;
-        sessionAddress = session.remoteAddress() == null
-                ? i18n.text("player.unknownDevice")
-                : session.remoteAddress().getAddress().getHostAddress();
-        sessionLabel.setText(i18n.text("player.device", sessionAddress));
-        cardLayout.show(cards, PLAYER);
-        pageTitle.setText(i18n.text("player.title"));
-        showControls();
-        if (settings.bringToFront()) {
-            restoreAndShow();
-        }
+        refreshHero();
+        playbackWindow.showSession(session, settings);
     }
 
     @Override
     public void onSessionStopped() {
         playing = false;
-        sessionAddress = null;
-        cardLayout.show(cards, IDLE);
-        pageTitle.setText(i18n.text("home.title"));
-        formatLabel.setText("—");
-        if (fullScreen) {
-            toggleFullScreen();
-        }
+        refreshHero();
+        playbackWindow.endSession();
     }
 
     @Override
     public void onVideoFormat(int width, int height) {
-        formatLabel.setText(width + " × " + height);
+        playbackWindow.updateVideoFormat(width, height);
     }
 
     @Override
@@ -163,16 +124,15 @@ public final class MainFrame extends JFrame implements ReceiverView {
     }
 
     @Override
-    public void onSettingsChanged(AppSettings settings) {
-        boolean languageChanged = this.settings.language() != settings.language();
-        this.settings = settings;
-        i18n.setLanguage(settings.language());
-        receiverName.setText(settings.receiverName());
-        resolutionValue.setText(displayDescription(settings));
+    public void onSettingsChanged(AppSettings updatedSettings) {
+        boolean languageChanged = this.settings.language() != updatedSettings.language();
+        this.settings = updatedSettings;
+        i18n.setLanguage(updatedSettings.language());
         refreshTexts();
+        playbackWindow.refreshTexts();
         if (languageChanged) {
             tray.close();
-            tray = new TrayController(this, controller, i18n);
+            tray = new TrayController(this, i18n);
         }
         tray.update(serverState);
     }
@@ -188,6 +148,7 @@ public final class MainFrame extends JFrame implements ReceiverView {
 
     public void exitApplication() {
         tray.close();
+        playbackWindow.closeWindow();
         controller.close();
         dispose();
         System.exit(0);
@@ -195,207 +156,165 @@ public final class MainFrame extends JFrame implements ReceiverView {
 
     private void buildUi() {
         JPanel root = new JPanel(new BorderLayout());
-        root.setBorder(BorderFactory.createEmptyBorder(0, 0, 0, 0));
-        root.add(buildSidebar(), BorderLayout.WEST);
+        root.add(buildAppBar(), BorderLayout.NORTH);
 
-        JPanel workspace = new JPanel(new BorderLayout(0, 14));
-        workspace.setBorder(BorderFactory.createEmptyBorder(22, 26, 24, 26));
-        workspace.add(buildHeader(), BorderLayout.NORTH);
-        cards.add(buildIdlePanel(), IDLE);
-        cards.add(buildPlayerPanel(), PLAYER);
-        workspace.add(cards, BorderLayout.CENTER);
+        JPanel workspace = new JPanel(new BorderLayout(0, 16));
+        workspace.setBorder(BorderFactory.createEmptyBorder(22, 28, 28, 28));
+        workspace.add(buildErrorBanner(), BorderLayout.NORTH);
+        workspace.add(buildDashboard(), BorderLayout.CENTER);
         root.add(workspace, BorderLayout.CENTER);
         setContentPane(root);
     }
 
-    private JPanel buildSidebar() {
-        JPanel sidebar = new JPanel();
-        sidebar.setPreferredSize(new Dimension(230, 0));
-        sidebar.setLayout(new BoxLayout(sidebar, BoxLayout.Y_AXIS));
-        sidebar.setBorder(BorderFactory.createEmptyBorder(28, 24, 24, 24));
-        sidebar.putClientProperty("FlatLaf.style", "background: darken(@background,3%)");
+    private JPanel buildAppBar() {
+        JPanel appBar = new JPanel(new BorderLayout());
+        appBar.setBorder(BorderFactory.createEmptyBorder(15, 28, 15, 22));
+        appBar.putClientProperty("FlatLaf.style", "background: darken(@background,3%)");
 
-        JLabel logo = new JLabel("  AirPlay Receiver", new FlatSVGIcon("icons/app.svg", 32, 32),
+        JLabel product = new JLabel("  AirPlay Receiver", new FlatSVGIcon("icons/app.svg", 32, 32),
                 SwingConstants.LEFT);
-        logo.setFont(logo.getFont().deriveFont(Font.BOLD, 16f));
-        logo.setAlignmentX(LEFT_ALIGNMENT);
-        sidebar.add(logo);
-        sidebar.add(Box.createVerticalStrut(42));
+        product.setFont(product.getFont().deriveFont(Font.BOLD, 17f));
+        appBar.add(product, BorderLayout.WEST);
 
-        receiverName.setAlignmentX(LEFT_ALIGNMENT);
-        sidebar.add(receiverName);
-        sidebar.add(Box.createVerticalStrut(8));
-        languageHint.setAlignmentX(LEFT_ALIGNMENT);
-        languageHint.putClientProperty("FlatLaf.styleClass", "small");
-        sidebar.add(languageHint);
-        sidebar.add(Box.createVerticalGlue());
-
-        logsButton.setHorizontalAlignment(SwingConstants.LEFT);
-        logsButton.setAlignmentX(LEFT_ALIGNMENT);
-        logsButton.setMaximumSize(new Dimension(Integer.MAX_VALUE, 38));
+        JPanel actions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+        actions.setOpaque(false);
+        statusLabel.setBorder(BorderFactory.createEmptyBorder(7, 13, 7, 13));
+        actions.add(statusLabel);
         logsButton.addActionListener(event -> WindowsIntegration.openDirectory(AppPaths.logsDirectory()));
-        sidebar.add(logsButton);
-        sidebar.add(Box.createVerticalStrut(8));
-
-        settingsButton.setText(i18n.text("settings.title"));
-        settingsButton.setHorizontalAlignment(SwingConstants.LEFT);
-        settingsButton.setAlignmentX(LEFT_ALIGNMENT);
-        settingsButton.setMaximumSize(new Dimension(Integer.MAX_VALUE, 38));
+        actions.add(logsButton);
         settingsButton.addActionListener(event -> new SettingsDialog(this, i18n)
                 .showSettings(settings, controller::updateSettings));
-        sidebar.add(settingsButton);
-        return sidebar;
+        actions.add(settingsButton);
+        appBar.add(actions, BorderLayout.EAST);
+        return appBar;
     }
 
-    private JPanel buildHeader() {
-        JPanel headerAndError = new JPanel(new BorderLayout(0, 12));
-        JPanel header = new JPanel(new BorderLayout());
-        header.add(pageTitle, BorderLayout.WEST);
-
-        JPanel status = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 0));
-        statusLabel.setBorder(BorderFactory.createEmptyBorder(7, 13, 7, 13));
-        receiverToggle.addActionListener(event -> controller.setReceiverEnabled(receiverToggle.isSelected()));
-        status.add(statusLabel);
-        status.add(receiverToggle);
-        header.add(status, BorderLayout.EAST);
-        headerAndError.add(header, BorderLayout.NORTH);
-
+    private JPanel buildErrorBanner() {
         errorBanner.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(new Color(220, 83, 83, 120)),
+                BorderFactory.createLineBorder(new Color(220, 83, 83, 100)),
                 BorderFactory.createEmptyBorder(10, 14, 10, 8)));
-        errorBanner.putClientProperty("FlatLaf.style", "arc: 14; background: fade(#d84d4d,12%)");
+        errorBanner.putClientProperty("FlatLaf.style", "arc: 16; background: fade(#d84d4d,12%)");
         errorBanner.add(errorLabel, BorderLayout.CENTER);
         JPanel actions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 5, 0));
         actions.setOpaque(false);
         firewallButton.addActionListener(event -> WindowsIntegration.openFirewallSettings());
         JButton dismiss = new JButton("×");
+        dismiss.putClientProperty("FlatLaf.style", "borderWidth: 0; focusWidth: 0");
         dismiss.addActionListener(event -> hideError());
         actions.add(firewallButton);
         actions.add(dismiss);
         errorBanner.add(actions, BorderLayout.EAST);
         errorBanner.setVisible(false);
-        headerAndError.add(errorBanner, BorderLayout.SOUTH);
-        return headerAndError;
+        return errorBanner;
     }
 
-    private JPanel buildIdlePanel() {
-        JPanel idle = new JPanel(new BorderLayout(0, 20));
-        JPanel hero = cardPanel(new BorderLayout(18, 8));
-        hero.setBorder(BorderFactory.createEmptyBorder(34, 38, 34, 38));
-        JLabel illustration = new JLabel(new FlatSVGIcon("icons/cast.svg", 96, 96));
-        hero.add(illustration, BorderLayout.WEST);
-        JPanel copy = new JPanel();
-        copy.setOpaque(false);
-        copy.setLayout(new BoxLayout(copy, BoxLayout.Y_AXIS));
-        copy.add(waitingTitle);
-        copy.add(Box.createVerticalStrut(7));
-        waitingSubtitle.setFont(waitingSubtitle.getFont().deriveFont(15f));
-        copy.add(waitingSubtitle);
-        hero.add(copy, BorderLayout.CENTER);
-        idle.add(hero, BorderLayout.NORTH);
+    private JPanel buildDashboard() {
+        JPanel dashboard = new JPanel(new GridBagLayout());
+        GridBagConstraints constraints = new GridBagConstraints();
+        constraints.gridx = 0;
+        constraints.gridy = 0;
+        constraints.gridwidth = 2;
+        constraints.weightx = 1;
+        constraints.fill = GridBagConstraints.HORIZONTAL;
+        constraints.insets = new Insets(0, 0, 18, 0);
+        dashboard.add(buildHero(), constraints);
 
-        JPanel lower = new JPanel(new GridLayout(1, 2, 18, 0));
-        lower.add(buildInstructions());
-        lower.add(buildDeviceInfo());
-        idle.add(lower, BorderLayout.CENTER);
-        return idle;
+        constraints.gridy = 1;
+        constraints.gridwidth = 1;
+        constraints.weighty = 1;
+        constraints.fill = GridBagConstraints.BOTH;
+        constraints.insets = new Insets(0, 0, 0, 9);
+        dashboard.add(buildInstructions(), constraints);
+        constraints.gridx = 1;
+        constraints.insets = new Insets(0, 9, 0, 0);
+        dashboard.add(buildDeviceInfo(), constraints);
+        return dashboard;
+    }
+
+    private JPanel buildHero() {
+        JPanel hero = cardPanel(new BorderLayout(26, 0));
+        hero.setBorder(BorderFactory.createEmptyBorder(28, 34, 28, 34));
+        JLabel illustration = new JLabel(new FlatSVGIcon("icons/cast.svg", 92, 92));
+        hero.add(illustration, BorderLayout.WEST);
+
+        JPanel copy = transparentColumn();
+        waitingTitle.setAlignmentX(LEFT_ALIGNMENT);
+        copy.add(waitingTitle);
+        copy.add(Box.createVerticalStrut(5));
+        waitingSubtitle.setAlignmentX(LEFT_ALIGNMENT);
+        copy.add(waitingSubtitle);
+        copy.add(Box.createVerticalStrut(17));
+        receiverCaption.putClientProperty("FlatLaf.styleClass", "small");
+        receiverCaption.setAlignmentX(LEFT_ALIGNMENT);
+        copy.add(receiverCaption);
+        copy.add(Box.createVerticalStrut(2));
+        receiverName.setRows(2);
+        receiverName.setAlignmentX(LEFT_ALIGNMENT);
+        copy.add(receiverName);
+        hero.add(copy, BorderLayout.CENTER);
+        return hero;
     }
 
     private JPanel buildInstructions() {
         JPanel panel = cardPanel();
         panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
         panel.setBorder(BorderFactory.createEmptyBorder(24, 26, 24, 26));
+        instructionsTitle.setAlignmentX(LEFT_ALIGNMENT);
         panel.add(instructionsTitle);
-        panel.add(Box.createVerticalStrut(20));
-        for (int index = 1; index <= 3; index++) {
-            JLabel step = instructionSteps[index - 1];
-            step.setIcon(numberIcon(index));
-            step.setIconTextGap(13);
-            panel.add(step);
-            panel.add(Box.createVerticalStrut(17));
+        panel.add(Box.createVerticalStrut(18));
+        for (int index = 0; index < instructionSteps.length; index++) {
+            panel.add(instructionRow(index + 1, instructionSteps[index]));
+            if (index < instructionSteps.length - 1) {
+                panel.add(Box.createVerticalStrut(15));
+            }
         }
         panel.add(Box.createVerticalGlue());
         return panel;
+    }
+
+    private JPanel instructionRow(int number, JTextArea text) {
+        JPanel row = new JPanel(new BorderLayout(13, 0));
+        row.setOpaque(false);
+        row.setAlignmentX(LEFT_ALIGNMENT);
+        JLabel badge = new JLabel(String.valueOf(number), numberIcon(), SwingConstants.CENTER);
+        badge.setHorizontalTextPosition(SwingConstants.CENTER);
+        badge.setForeground(Color.WHITE);
+        badge.setFont(badge.getFont().deriveFont(Font.BOLD, 13f));
+        row.add(badge, BorderLayout.WEST);
+        row.add(text, BorderLayout.CENTER);
+        return row;
     }
 
     private JPanel buildDeviceInfo() {
         JPanel panel = cardPanel();
         panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
         panel.setBorder(BorderFactory.createEmptyBorder(24, 26, 24, 26));
+        deviceInfoTitle.setAlignmentX(LEFT_ALIGNMENT);
         panel.add(deviceInfoTitle);
-        panel.add(Box.createVerticalStrut(24));
-        panel.add(infoRow(networkTitle, networkValue));
-        panel.add(Box.createVerticalStrut(20));
-        panel.add(infoRow(capabilityTitle, resolutionValue));
-        panel.add(Box.createVerticalStrut(20));
-        trustedNetworkLabel.setIcon(new FlatSVGIcon("icons/shield.svg", 18, 18));
-        trustedNetworkLabel.setHorizontalAlignment(SwingConstants.LEFT);
-        trustedNetworkLabel.setIconTextGap(10);
-        panel.add(trustedNetworkLabel);
+        panel.add(Box.createVerticalStrut(18));
+        networkTitle.putClientProperty("FlatLaf.styleClass", "small");
+        networkTitle.setAlignmentX(LEFT_ALIGNMENT);
+        panel.add(networkTitle);
+        panel.add(Box.createVerticalStrut(5));
+        networkValue.setAlignmentX(LEFT_ALIGNMENT);
+        panel.add(networkValue);
+        panel.add(Box.createVerticalStrut(18));
+        capabilityTitle.putClientProperty("FlatLaf.styleClass", "small");
+        capabilityTitle.setAlignmentX(LEFT_ALIGNMENT);
+        panel.add(capabilityTitle);
+        panel.add(Box.createVerticalStrut(5));
+        resolutionValue.setAlignmentX(LEFT_ALIGNMENT);
+        panel.add(resolutionValue);
         panel.add(Box.createVerticalGlue());
+        trustedNetworkLabel.setIcon(new FlatSVGIcon("icons/shield.svg", 18, 18));
+        trustedNetworkLabel.setIconTextGap(9);
+        trustedNetworkLabel.setAlignmentX(LEFT_ALIGNMENT);
+        panel.add(trustedNetworkLabel);
         return panel;
     }
 
-    private JPanel buildPlayerPanel() {
-        JPanel player = new JPanel(new BorderLayout());
-        player.setBackground(Color.BLACK);
-        player.setBorder(BorderFactory.createLineBorder(new Color(0, 0, 0, 80)));
-        player.add(controller.videoComponent(), BorderLayout.CENTER);
-
-        controls.setBackground(new Color(20, 22, 28));
-        sessionLabel.setForeground(Color.WHITE);
-        formatLabel.setForeground(new Color(190, 195, 205));
-        controls.add(sessionLabel);
-        controls.add(formatLabel);
-        fullScreenButton.addActionListener(event -> toggleFullScreen());
-        controls.add(fullScreenButton);
-        muteButton.addActionListener(event -> {
-            controller.setMuted(muteButton.isSelected());
-            muteButton.setIcon(new FlatSVGIcon(muteButton.isSelected()
-                    ? "icons/muted.svg" : "icons/volume.svg", 18, 18));
-        });
-        controls.add(muteButton);
-        JSlider volume = new JSlider(0, 100, (int) Math.round(settings.volume() * 100));
-        volume.setPreferredSize(new Dimension(110, 26));
-        volume.addChangeListener(event -> controller.setVolume(volume.getValue() / 100.0));
-        controls.add(volume);
-        alwaysOnTop.setText(i18n.text("player.alwaysOnTop"));
-        alwaysOnTop.setForeground(Color.WHITE);
-        alwaysOnTop.addActionListener(event -> setAlwaysOnTop(alwaysOnTop.isSelected()));
-        controls.add(alwaysOnTop);
-        stopButton.addActionListener(event -> controller.disconnectSession());
-        controls.add(stopButton);
-        player.add(controls, BorderLayout.SOUTH);
-
-        MouseAdapter reveal = new MouseAdapter() {
-            @Override
-            public void mouseMoved(MouseEvent event) {
-                showControls();
-            }
-        };
-        player.addMouseMotionListener(reveal);
-        controller.videoComponent().addMouseMotionListener(reveal);
-        return player;
-    }
-
-    private JPanel infoRow(JLabel label, JLabel value) {
-        JPanel row = new JPanel(new BorderLayout());
-        row.setOpaque(false);
-        label.putClientProperty("FlatLaf.styleClass", "small");
-        value.setHorizontalAlignment(SwingConstants.RIGHT);
-        row.add(label, BorderLayout.WEST);
-        row.add(value, BorderLayout.CENTER);
-        return row;
-    }
-
     private void refreshTexts() {
-        pageTitle.setText(playing
-                ? i18n.text("player.title") : i18n.text("home.title"));
-        receiverToggle.setText(i18n.text("receiver.toggle"));
-        receiverName.setText(settings.receiverName());
-        languageHint.setText(i18n.text("sidebar.subtitle"));
-        waitingTitle.setText(i18n.text("home.readyTitle"));
-        waitingSubtitle.setText(i18n.text("home.readySubtitle", settings.receiverName()));
+        refreshHero();
         instructionsTitle.setText(i18n.text("home.howTo"));
         for (int index = 0; index < instructionSteps.length; index++) {
             instructionSteps[index].setText(i18n.text("home.step" + (index + 1)));
@@ -405,18 +324,33 @@ public final class MainFrame extends JFrame implements ReceiverView {
         capabilityTitle.setText(i18n.text("home.capability"));
         trustedNetworkLabel.setText(i18n.text("home.trustedNetwork"));
         List<String> addresses = NetworkInfo.localAddresses();
-        networkValue.setText(addresses.isEmpty() ? i18n.text("home.noNetwork") : String.join("  ·  ", addresses));
+        String addressText = addresses.isEmpty() ? i18n.text("home.noNetwork") : String.join("  ·  ", addresses);
+        networkValue.setText(addressText);
+        networkValue.setToolTipText(addressText);
         resolutionValue.setText(displayDescription(settings));
-        settingsButton.setText(i18n.text("settings.title"));
-        logsButton.setText(i18n.text("action.logs"));
+        logsButton.setToolTipText(i18n.text("action.logs"));
+        settingsButton.setToolTipText(i18n.text("settings.title"));
         firewallButton.setText(i18n.text("action.firewall"));
-        fullScreenButton.setToolTipText(i18n.text("player.fullscreen"));
-        alwaysOnTop.setText(i18n.text("player.alwaysOnTop"));
-        stopButton.setText(i18n.text("player.stop"));
-        statusLabel.setText(i18n.text("state." + serverState.name().toLowerCase()));
-        if (sessionAddress != null) {
-            sessionLabel.setText(i18n.text("player.device", sessionAddress));
+        refreshStatus();
+
+        receiverCaption.setText(i18n.text("home.receiverName"));
+    }
+
+    private void refreshHero() {
+        receiverName.setText(settings.receiverName());
+        receiverName.setToolTipText(settings.receiverName());
+        if (playing) {
+            waitingTitle.setText(i18n.text("home.castingTitle"));
+            waitingSubtitle.setText(i18n.text("home.castingSubtitle"));
+        } else {
+            waitingTitle.setText(i18n.text("home.readyTitle"));
+            waitingSubtitle.setText(i18n.text("home.readySubtitle", settings.receiverName()));
         }
+    }
+
+    private void refreshStatus() {
+        statusLabel.setText(i18n.text("state." + serverState.name().toLowerCase()));
+        statusLabel.putClientProperty("FlatLaf.style", statusStyle(serverState));
     }
 
     private String displayDescription(AppSettings appSettings) {
@@ -427,10 +361,10 @@ public final class MainFrame extends JFrame implements ReceiverView {
                 yield i18n.text("display.primary", String.valueOf(display.getWidth()),
                         String.valueOf(display.getHeight()), String.valueOf(appSettings.maxFps()));
             }
-            case HD_720 -> "1280 × 720 · " + appSettings.maxFps() + "fps";
-            case FULL_HD_1080 -> "1920 × 1080 · " + appSettings.maxFps() + "fps";
+            case HD_720 -> "1280 × 720  ·  " + appSettings.maxFps() + "fps";
+            case FULL_HD_1080 -> "1920 × 1080  ·  " + appSettings.maxFps() + "fps";
             case CUSTOM -> appSettings.customWidth() + " × " + appSettings.customHeight()
-                    + " · " + appSettings.maxFps() + "fps";
+                    + "  ·  " + appSettings.maxFps() + "fps";
         };
     }
 
@@ -447,35 +381,29 @@ public final class MainFrame extends JFrame implements ReceiverView {
         });
     }
 
-    private void toggleFullScreen() {
-        GraphicsDevice device = GraphicsEnvironment.getLocalGraphicsEnvironment().getDefaultScreenDevice();
-        fullScreen = !fullScreen;
-        device.setFullScreenWindow(fullScreen ? this : null);
-        if (!fullScreen) {
-            setSize(Math.max(getWidth(), 860), Math.max(getHeight(), 600));
-            setLocationRelativeTo(null);
-        }
-    }
-
-    private void showControls() {
-        controls.setVisible(true);
-        hideControlsTimer.restart();
-    }
-
     private void hideError() {
         errorBanner.setVisible(false);
         revalidate();
     }
 
+    private static JPanel transparentColumn() {
+        JPanel panel = new JPanel();
+        panel.setOpaque(false);
+        panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
+        return panel;
+    }
+
     private static JPanel cardPanel() {
         JPanel panel = new JPanel();
-        panel.putClientProperty("FlatLaf.style", "arc: 22; background: lighten(@background,2%)");
+        panel.putClientProperty("FlatLaf.style",
+                "arc: 22; background: lighten(@background,2%); border: 1,1,1,1,fade(@foreground,7%),1,22");
         return panel;
     }
 
     private static JPanel cardPanel(java.awt.LayoutManager layout) {
         JPanel panel = new JPanel(layout);
-        panel.putClientProperty("FlatLaf.style", "arc: 22; background: lighten(@background,2%)");
+        panel.putClientProperty("FlatLaf.style",
+                "arc: 22; background: lighten(@background,2%); border: 1,1,1,1,fade(@foreground,7%),1,22");
         return panel;
     }
 
@@ -485,19 +413,30 @@ public final class MainFrame extends JFrame implements ReceiverView {
         return label;
     }
 
+    private static JTextArea textArea(float size) {
+        return textArea(size, Font.PLAIN);
+    }
+
+    private static JTextArea textArea(float size, int style) {
+        JTextArea text = new JTextArea();
+        text.setEditable(false);
+        text.setFocusable(false);
+        text.setOpaque(false);
+        text.setLineWrap(true);
+        text.setWrapStyleWord(true);
+        text.setBorder(null);
+        text.setFont(text.getFont().deriveFont(style, size));
+        return text;
+    }
+
     private static JButton iconButton(String icon, int size) {
         JButton button = new JButton(new FlatSVGIcon(icon, size, size));
         button.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        button.putClientProperty("FlatLaf.style", "arc: 12; margin: 8,10,8,10");
         return button;
     }
 
-    private static JToggleButton iconToggle(String icon, int size) {
-        JToggleButton button = new JToggleButton(new FlatSVGIcon(icon, size, size));
-        button.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-        return button;
-    }
-
-    private static javax.swing.Icon numberIcon(int number) {
+    private static javax.swing.Icon numberIcon() {
         return new javax.swing.Icon() {
             @Override
             public void paintIcon(java.awt.Component component, java.awt.Graphics graphics, int x, int y) {
@@ -505,21 +444,18 @@ public final class MainFrame extends JFrame implements ReceiverView {
                 g.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING,
                         java.awt.RenderingHints.VALUE_ANTIALIAS_ON);
                 g.setColor(new Color(83, 109, 254));
-                g.fillOval(x, y, 26, 26);
-                g.setColor(Color.WHITE);
-                g.setFont(component.getFont().deriveFont(Font.BOLD, 13f));
-                g.drawString(String.valueOf(number), x + 9, y + 18);
+                g.fillOval(x, y, 28, 28);
                 g.dispose();
             }
 
             @Override
             public int getIconWidth() {
-                return 26;
+                return 28;
             }
 
             @Override
             public int getIconHeight() {
-                return 26;
+                return 28;
             }
         };
     }

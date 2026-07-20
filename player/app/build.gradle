@@ -34,6 +34,74 @@ def packageStagedImage = layout.buildDirectory.dir('package/staged-image')
 def packageInstaller = layout.buildDirectory.dir('package/installer')
 def isWindows = System.getProperty('os.name').toLowerCase(Locale.ROOT).contains('windows')
 
+// The upstream Windows runtime also contains headers, static/import libraries,
+// development tools and every GStreamer plug-in.  Most of its 4+ GiB is not
+// needed by the three pipelines used by this application.  Keep the native
+// dependency closure for those pipelines explicit so an SDK can never be
+// copied wholesale into the product again.
+def gstreamerRuntimeFiles = [
+        // GStreamer/GLib and FFmpeg DLLs used by the selected plug-ins.
+        'bin/avcodec-*.dll',
+        'bin/avfilter-*.dll',
+        'bin/avformat-*.dll',
+        'bin/avutil-*.dll',
+        'bin/bz2.dll',
+        'bin/ffi-*.dll',
+        'bin/glib-2.0-0.dll',
+        'bin/gmodule-2.0-0.dll',
+        'bin/gobject-2.0-0.dll',
+        'bin/gstapp-1.0-0.dll',
+        'bin/gstaudio-1.0-0.dll',
+        'bin/gstbase-1.0-0.dll',
+        'bin/gstcodecparsers-1.0-0.dll',
+        'bin/gstpbutils-1.0-0.dll',
+        'bin/gstreamer-1.0-0.dll',
+        'bin/gsttag-1.0-0.dll',
+        'bin/gstvideo-1.0-0.dll',
+        'bin/gst-inspect-1.0.exe',
+        'bin/intl-*.dll',
+        'bin/orc-*.dll',
+        'bin/pcre2-8-0.dll',
+        'bin/swresample-*.dll',
+        'bin/swscale-*.dll',
+        'bin/z-1.dll',
+
+        // appsrc/appsink, parsing, H.264/ALAC/AAC decoding, conversion,
+        // volume and native Windows audio output.
+        'lib/gstreamer-1.0/gstapp.dll',
+        'lib/gstreamer-1.0/gstcoreelements.dll',
+        'lib/gstreamer-1.0/gstvideoparsersbad.dll',
+        'lib/gstreamer-1.0/gstlibav.dll',
+        'lib/gstreamer-1.0/gstvideoconvertscale.dll',
+        'lib/gstreamer-1.0/gstaudioconvert.dll',
+        'lib/gstreamer-1.0/gstaudioresample.dll',
+        'lib/gstreamer-1.0/gstvolume.dll',
+        'lib/gstreamer-1.0/gstautodetect.dll',
+        'lib/gstreamer-1.0/gstwasapi.dll',
+        'lib/gstreamer-1.0/gstwasapi2.dll',
+
+        // Required when GStreamer creates a fresh per-user plug-in registry.
+        'libexec/gstreamer-1.0/gst-plugin-scanner.exe',
+
+        // Preserve the upstream notices for every dynamically linked component.
+        'share/licenses/**'
+]
+def requiredGstreamerFiles = [
+        'bin/gstreamer-1.0-0.dll',
+        'bin/gst-inspect-1.0.exe',
+        'lib/gstreamer-1.0/gstapp.dll',
+        'lib/gstreamer-1.0/gstvideoparsersbad.dll',
+        'lib/gstreamer-1.0/gstlibav.dll',
+        'lib/gstreamer-1.0/gstvideoconvertscale.dll',
+        'lib/gstreamer-1.0/gstaudioconvert.dll',
+        'lib/gstreamer-1.0/gstaudioresample.dll',
+        'lib/gstreamer-1.0/gstvolume.dll',
+        'lib/gstreamer-1.0/gstautodetect.dll',
+        'lib/gstreamer-1.0/gstwasapi2.dll',
+        'libexec/gstreamer-1.0/gst-plugin-scanner.exe'
+]
+def maximumStagedGstreamerBytes = 80L * 1024L * 1024L
+
 tasks.register('preparePackageInput', Sync) {
     dependsOn jar
     into packageInput
@@ -78,11 +146,30 @@ tasks.register('stageGStreamerRuntime', Sync) {
     from(packageImage)
     from(runtimeDirectory) {
         into 'AirPlay Receiver/gstreamer'
+        include gstreamerRuntimeFiles
+        includeEmptyDirs = false
     }
     doFirst {
         if (!runtimeDirectory.isPresent()) {
             throw new GradleException('GSTREAMER_RUNTIME_DIR must point to the GStreamer 1.28.5 MSVC x86_64 runtime')
         }
+    }
+    doLast {
+        def stagedRuntime = packageStagedImage.get().dir('AirPlay Receiver/gstreamer').asFile
+        def missingFiles = requiredGstreamerFiles.findAll { !new File(stagedRuntime, it).isFile() }
+        if (!missingFiles.isEmpty()) {
+            throw new GradleException("The pruned GStreamer runtime is missing: ${missingFiles.join(', ')}")
+        }
+
+        long stagedBytes = fileTree(stagedRuntime).files.sum { it.length() } ?: 0L
+        if (stagedBytes > maximumStagedGstreamerBytes) {
+            throw new GradleException(String.format(Locale.ROOT,
+                    'Pruned GStreamer runtime is unexpectedly large: %.1f MiB (limit: 80 MiB)',
+                    stagedBytes / 1024d / 1024d))
+        }
+        logger.lifecycle(String.format(Locale.ROOT,
+                'Staged pruned GStreamer runtime: %d files, %.1f MiB',
+                fileTree(stagedRuntime).files.size(), stagedBytes / 1024d / 1024d))
     }
 }
 
@@ -105,7 +192,9 @@ tasks.register('packageWindows', Exec) {
                 '--app-version', project.version.toString(),
                 '--vendor', 'java-airplay',
                 '--win-per-user-install',
-                '--install-dir', 'AirPlay Receiver',
+                // Keep binaries away from %LOCALAPPDATA%\AirPlay Receiver, which is
+                // intentionally reserved for logs that must survive an uninstall.
+                '--install-dir', 'AirPlay Receiver App',
                 '--win-menu',
                 '--win-shortcut',
                 '--license-file', rootProject.file('LICENSE')]
