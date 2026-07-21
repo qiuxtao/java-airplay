@@ -28,7 +28,7 @@ allprojects {
     apply plugin: 'java'
 
     group = 'com.github.serezhka'
-    version = '1.0.15'
+    version = '1.0.16'
 
     repositories {
         mavenCentral()

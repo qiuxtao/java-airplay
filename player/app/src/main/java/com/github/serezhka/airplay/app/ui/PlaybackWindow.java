@@ -4,7 +4,7 @@ import com.formdev.flatlaf.FlatClientProperties;
 import com.formdev.flatlaf.extras.FlatSVGIcon;
 import com.github.serezhka.airplay.app.ReceiverController;
 import com.github.serezhka.airplay.app.i18n.I18n;
-import com.github.serezhka.airplay.app.platform.WindowsAspectRatioResizer;
+import com.github.serezhka.airplay.app.platform.WindowsResizeBorderDisabler;
 import com.github.serezhka.airplay.app.settings.AppSettings;
 import com.github.serezhka.airplay.server.SessionInfo;
 
@@ -23,7 +23,10 @@ import java.awt.Color;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.GraphicsConfiguration;
+import java.awt.GraphicsEnvironment;
+import java.awt.Insets;
 import java.awt.Rectangle;
+import java.awt.Toolkit;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 
@@ -33,6 +36,7 @@ final class PlaybackWindow extends JFrame {
     private static final Dimension FALLBACK_MINIMUM_SIZE = new Dimension(640, 400);
     private static final int MINIMUM_PORTRAIT_WIDTH = 420;
     private static final int MINIMUM_LANDSCAPE_HEIGHT = 360;
+    private static final int SCREEN_GAP = 18;
 
     private final ReceiverController controller;
     private final I18n i18n;
@@ -43,11 +47,13 @@ final class PlaybackWindow extends JFrame {
     private final JToggleButton muteButton = toggleButton("icons/volume.svg", 17);
     private final JToggleButton alwaysOnTopButton = toggleButton("icons/pin.svg", 17);
     private final JSlider volume;
-    private WindowsAspectRatioResizer aspectResizer;
+    private final AspectRatioResizeGlassPane resizeGlassPane;
+    private WindowsResizeBorderDisabler resizeBorderDisabler;
 
     private boolean activeSession;
     private boolean disconnectRequested;
     private String sessionAddress;
+    private AppSettings sessionSettings;
     private int sourceWidth;
     private int sourceHeight;
 
@@ -56,10 +62,17 @@ final class PlaybackWindow extends JFrame {
         this.controller = controller;
         this.i18n = i18n;
         this.volume = new JSlider(0, 100, (int) Math.round(controller.settings().volume() * 100));
+        this.resizeGlassPane = new AspectRatioResizeGlassPane(
+                this,
+                player,
+                this::sourceAspect,
+                () -> activeSession && sourceWidth > 0 && sourceHeight > 0);
         setDefaultCloseOperation(DO_NOTHING_ON_CLOSE);
         setMinimumSize(FALLBACK_MINIMUM_SIZE);
         setSize(980, 640);
         buildUi();
+        setGlassPane(resizeGlassPane);
+        resizeGlassPane.setVisible(true);
         installBehavior();
         refreshTexts();
     }
@@ -67,22 +80,14 @@ final class PlaybackWindow extends JFrame {
     void showSession(SessionInfo session, AppSettings settings) {
         activeSession = true;
         disconnectRequested = false;
+        sessionSettings = settings;
         sessionAddress = session.remoteAddress() == null
                 ? i18n.text("player.unknownDevice")
                 : session.remoteAddress().getAddress().getHostAddress();
         sessionLabel.setToolTipText(i18n.text("player.device", sessionAddress));
         setTitle(i18n.text("player.windowTitle"));
-        if (!isVisible()) {
-            setAutoRequestFocus(settings.bringToFront());
-            setLocationRelativeTo(null);
-            setVisible(true);
-            setAutoRequestFocus(true);
-        }
-        ensureAspectResizer();
-        if (settings.bringToFront()) {
-            setExtendedState(getExtendedState() & ~ICONIFIED);
-            toFront();
-            requestFocus();
+        if (sourceWidth > 0 && sourceHeight > 0) {
+            prepareAndShow(settings);
         }
     }
 
@@ -90,11 +95,12 @@ final class PlaybackWindow extends JFrame {
         activeSession = false;
         disconnectRequested = false;
         sessionAddress = null;
+        sessionSettings = null;
         sourceWidth = 0;
         sourceHeight = 0;
         formatLabel.setText("—");
-        if (aspectResizer != null) {
-            aspectResizer.clearVideoFormat();
+        if (resizeBorderDisabler != null) {
+            resizeBorderDisabler.setResizeDisabled(false);
         }
         setMinimumSize(FALLBACK_MINIMUM_SIZE);
         setVisible(false);
@@ -107,10 +113,15 @@ final class PlaybackWindow extends JFrame {
         sourceWidth = width;
         sourceHeight = height;
         formatLabel.setText(width + " × " + height);
-        if ((getExtendedState() & MAXIMIZED_BOTH) == 0) {
+        ensureDisplayable();
+        ensureResizeBorderDisabler();
+        resizeBorderDisabler.setResizeDisabled(true);
+        if ((getExtendedState() & MAXIMIZED_BOTH) == 0 || !isVisible()) {
             fitWindowToVideo(width, height);
         }
-        updateAspectResizer();
+        if (activeSession && sessionSettings != null) {
+            prepareAndShow(sessionSettings);
+        }
     }
 
     void refreshTexts() {
@@ -123,9 +134,9 @@ final class PlaybackWindow extends JFrame {
     }
 
     void closeWindow() {
-        if (aspectResizer != null) {
-            aspectResizer.close();
-            aspectResizer = null;
+        if (resizeBorderDisabler != null) {
+            resizeBorderDisabler.close();
+            resizeBorderDisabler = null;
         }
         dispose();
     }
@@ -204,14 +215,15 @@ final class PlaybackWindow extends JFrame {
     private void fitWindowToVideo(int width, int height) {
         GraphicsConfiguration configuration = getGraphicsConfiguration();
         if (configuration == null) {
-            return;
+            configuration = GraphicsEnvironment.getLocalGraphicsEnvironment()
+                    .getDefaultScreenDevice().getDefaultConfiguration();
         }
-        Rectangle screen = configuration.getBounds();
+        Rectangle screen = usableScreenBounds(configuration);
         int chromeWidth = chromeWidth();
         int chromeHeight = chromeHeight();
-        int availableWidth = Math.min(1280, (int) Math.round(screen.width * 0.82) - chromeWidth);
-        int availableHeight = Math.min(1000, (int) Math.round(screen.height * 0.82) - chromeHeight);
-        double scale = Math.min(1d, Math.min((double) availableWidth / width, (double) availableHeight / height));
+        int availableWidth = Math.max(1, screen.width - SCREEN_GAP * 2 - chromeWidth);
+        int availableHeight = Math.max(1, screen.height - SCREEN_GAP * 2 - chromeHeight);
+        double scale = Math.min((double) availableWidth / width, (double) availableHeight / height);
         Dimension target = new Dimension(
                 Math.max(1, (int) Math.round(width * scale)),
                 Math.max(1, (int) Math.round(height * scale)));
@@ -220,27 +232,64 @@ final class PlaybackWindow extends JFrame {
             target = minimum;
         }
         setMinimumSize(frameSizeForVideo(minimum));
-        applyVideoSize(target, true);
+        applyVideoSize(target, screen);
     }
 
-    private void applyVideoSize(Dimension videoSize, boolean recenter) {
-        setSize(videoSize.width + chromeWidth(), videoSize.height + chromeHeight());
-        if (recenter) {
-            setLocationRelativeTo(null);
+    private void applyVideoSize(Dimension videoSize, Rectangle usableScreen) {
+        setBounds(sideWindowBounds(frameSizeForVideo(videoSize), usableScreen, SCREEN_GAP));
+    }
+
+    static Rectangle sideWindowBounds(Dimension windowSize, Rectangle usableScreen, int gap) {
+        int x = usableScreen.x + usableScreen.width - windowSize.width - gap;
+        int y = usableScreen.y + Math.max(gap, (usableScreen.height - windowSize.height) / 2);
+        return new Rectangle(
+                Math.max(usableScreen.x + gap, x),
+                y,
+                windowSize.width,
+                windowSize.height);
+    }
+
+    private void ensureDisplayable() {
+        if (!isDisplayable()) {
+            addNotify();
+            validate();
         }
     }
 
-    private void ensureAspectResizer() {
-        if (aspectResizer == null) {
-            aspectResizer = WindowsAspectRatioResizer.install(this);
+    private void ensureResizeBorderDisabler() {
+        if (resizeBorderDisabler == null) {
+            resizeBorderDisabler = WindowsResizeBorderDisabler.install(this);
         }
-        updateAspectResizer();
     }
 
-    private void updateAspectResizer() {
-        if (aspectResizer != null && sourceWidth > 0 && sourceHeight > 0) {
-            aspectResizer.setVideoFormat(sourceWidth, sourceHeight, chromeWidth(), chromeHeight(), getMinimumSize());
+    private void prepareAndShow(AppSettings settings) {
+        ensureDisplayable();
+        ensureResizeBorderDisabler();
+        resizeBorderDisabler.setResizeDisabled(true);
+        if (!isVisible()) {
+            setAutoRequestFocus(settings.bringToFront());
+            setVisible(true);
+            setAutoRequestFocus(true);
         }
+        if (settings.bringToFront()) {
+            setExtendedState(getExtendedState() & ~ICONIFIED);
+            toFront();
+            requestFocus();
+        }
+    }
+
+    private double sourceAspect() {
+        return sourceWidth > 0 && sourceHeight > 0 ? (double) sourceWidth / sourceHeight : 1d;
+    }
+
+    private Rectangle usableScreenBounds(GraphicsConfiguration configuration) {
+        Rectangle bounds = configuration.getBounds();
+        Insets insets = Toolkit.getDefaultToolkit().getScreenInsets(configuration);
+        return new Rectangle(
+                bounds.x + insets.left,
+                bounds.y + insets.top,
+                bounds.width - insets.left - insets.right,
+                bounds.height - insets.top - insets.bottom);
     }
 
     private Dimension minimumVideoSize(int width,
