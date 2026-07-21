@@ -14,7 +14,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.awt.Dimension;
+import java.awt.GraphicsConfiguration;
 import java.awt.Window;
+import java.awt.geom.AffineTransform;
 
 /**
  * Applies an aspect ratio while Windows is sizing a window and disables the
@@ -47,10 +49,10 @@ public final class WindowsAspectRatioResizer implements AutoCloseable {
     private WindowProc windowProc;
     private boolean installed;
     private volatile double contentAspect;
-    private volatile int chromeWidth;
-    private volatile int chromeHeight;
-    private volatile int minimumOuterWidth;
-    private volatile int minimumOuterHeight;
+    private volatile int logicalChromeWidth;
+    private volatile int logicalChromeHeight;
+    private volatile int logicalMinimumOuterWidth;
+    private volatile int logicalMinimumOuterHeight;
 
     private WindowsAspectRatioResizer(Window window) {
         this.window = window;
@@ -79,10 +81,10 @@ public final class WindowsAspectRatioResizer implements AutoCloseable {
             return;
         }
         contentAspect = (double) width / height;
-        chromeWidth = Math.max(0, windowChromeWidth);
-        chromeHeight = Math.max(0, windowChromeHeight);
-        minimumOuterWidth = Math.max(1, minimumOuterSize.width);
-        minimumOuterHeight = Math.max(1, minimumOuterSize.height);
+        logicalChromeWidth = Math.max(0, windowChromeWidth);
+        logicalChromeHeight = Math.max(0, windowChromeHeight);
+        logicalMinimumOuterWidth = Math.max(1, minimumOuterSize.width);
+        logicalMinimumOuterHeight = Math.max(1, minimumOuterSize.height);
     }
 
     public void clearVideoFormat() {
@@ -156,16 +158,17 @@ public final class WindowsAspectRatioResizer implements AutoCloseable {
         int top = rect.getInt(4);
         int right = rect.getInt(8);
         int bottom = rect.getInt(12);
-        int proposedContentWidth = Math.max(1, right - left - chromeWidth);
-        int proposedContentHeight = Math.max(1, bottom - top - chromeHeight);
+        DeviceMetrics metrics = deviceMetrics();
+        int proposedContentWidth = Math.max(1, right - left - metrics.chromeWidth());
+        int proposedContentHeight = Math.max(1, bottom - top - metrics.chromeHeight());
         Dimension content = projectContentSize(
                 proposedContentWidth,
                 proposedContentHeight,
                 contentAspect,
-                Math.max(1, minimumOuterWidth - chromeWidth),
-                Math.max(1, minimumOuterHeight - chromeHeight));
-        int outerWidth = content.width + chromeWidth;
-        int outerHeight = content.height + chromeHeight;
+                Math.max(1, metrics.minimumOuterWidth() - metrics.chromeWidth()),
+                Math.max(1, metrics.minimumOuterHeight() - metrics.chromeHeight()));
+        int outerWidth = content.width + metrics.chromeWidth();
+        int outerHeight = content.height + metrics.chromeHeight();
 
         switch (edge) {
             case WMSZ_TOPLEFT -> {
@@ -209,6 +212,38 @@ public final class WindowsAspectRatioResizer implements AutoCloseable {
                 Math.max(1, (int) Math.round(projectedHeight)));
     }
 
+    private DeviceMetrics deviceMetrics() {
+        GraphicsConfiguration configuration = window.getGraphicsConfiguration();
+        AffineTransform transform = configuration == null
+                ? new AffineTransform()
+                : configuration.getDefaultTransform();
+        return scaleToDevicePixels(
+                logicalChromeWidth,
+                logicalChromeHeight,
+                logicalMinimumOuterWidth,
+                logicalMinimumOuterHeight,
+                transform.getScaleX(),
+                transform.getScaleY());
+    }
+
+    static DeviceMetrics scaleToDevicePixels(int chromeWidth,
+                                              int chromeHeight,
+                                              int minimumOuterWidth,
+                                              int minimumOuterHeight,
+                                              double scaleX,
+                                              double scaleY) {
+        return new DeviceMetrics(
+                scale(chromeWidth, scaleX),
+                scale(chromeHeight, scaleY),
+                Math.max(1, scale(minimumOuterWidth, scaleX)),
+                Math.max(1, scale(minimumOuterHeight, scaleY)));
+    }
+
+    private static int scale(int value, double factor) {
+        double usableFactor = factor > 0 && Double.isFinite(factor) ? factor : 1d;
+        return Math.max(0, (int) Math.round(value * usableFactor));
+    }
+
     static boolean isSingleAxisResizeHit(int hitTest) {
         return hitTest == HTLEFT || hitTest == HTRIGHT || hitTest == HTTOP || hitTest == HTBOTTOM;
     }
@@ -216,5 +251,11 @@ public final class WindowsAspectRatioResizer implements AutoCloseable {
     private static boolean isCorner(int sizingEdge) {
         return sizingEdge == WMSZ_TOPLEFT || sizingEdge == WMSZ_TOPRIGHT
                 || sizingEdge == WMSZ_BOTTOMLEFT || sizingEdge == WMSZ_BOTTOMRIGHT;
+    }
+
+    record DeviceMetrics(int chromeWidth,
+                         int chromeHeight,
+                         int minimumOuterWidth,
+                         int minimumOuterHeight) {
     }
 }

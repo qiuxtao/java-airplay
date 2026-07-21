@@ -7,6 +7,7 @@ import com.github.serezhka.airplay.app.ReceiverController;
 import com.github.serezhka.airplay.app.ReceiverView;
 import com.github.serezhka.airplay.app.i18n.I18n;
 import com.github.serezhka.airplay.app.platform.NetworkInfo;
+import com.github.serezhka.airplay.app.platform.ProcessExit;
 import com.github.serezhka.airplay.app.platform.WindowsIntegration;
 import com.github.serezhka.airplay.app.settings.AppSettings;
 import com.github.serezhka.airplay.server.ServerState;
@@ -21,7 +22,6 @@ import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JTextArea;
 import javax.swing.SwingConstants;
-import javax.swing.Timer;
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Cursor;
@@ -162,14 +162,14 @@ public final class MainFrame extends JFrame implements ReceiverView {
         if (!exiting.compareAndSet(false, true)) {
             return;
         }
+        // Arm this before touching Swing, the tray or the native playback window.
+        // Any of those can block while a mirroring session is being torn down.
+        ProcessExit.armWatchdog();
         setVisible(false);
         playbackWindow.closeWindow();
         tray.close();
         dispose();
 
-        Timer forcedExit = new Timer(3000, event -> System.exit(0));
-        forcedExit.setRepeats(false);
-        forcedExit.start();
         Thread.ofPlatform().name("airplay-shutdown").start(() -> {
             try {
                 controller.close();

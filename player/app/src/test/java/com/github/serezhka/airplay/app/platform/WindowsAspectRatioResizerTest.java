@@ -31,4 +31,12 @@ class WindowsAspectRatioResizerTest {
         assertFalse(WindowsAspectRatioResizer.isSingleAxisResizeHit(13));
         assertFalse(WindowsAspectRatioResizer.isSingleAxisResizeHit(17));
     }
+
+    @Test
+    void convertsSwingLogicalPixelsToWindowsPixelsAt125PercentDpi() {
+        WindowsAspectRatioResizer.DeviceMetrics metrics = WindowsAspectRatioResizer.scaleToDevicePixels(
+                16, 60, 640, 400, 1.25, 1.25);
+
+        assertEquals(new WindowsAspectRatioResizer.DeviceMetrics(20, 75, 800, 500), metrics);
+    }
 }
