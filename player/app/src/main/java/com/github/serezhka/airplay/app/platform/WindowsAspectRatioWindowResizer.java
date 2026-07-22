@@ -14,13 +14,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.awt.Dimension;
-import java.awt.Frame;
 import java.awt.GraphicsConfiguration;
 import java.awt.Rectangle;
 import java.awt.Window;
-import java.awt.event.ComponentAdapter;
-import java.awt.event.ComponentEvent;
 import java.awt.geom.AffineTransform;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /** Keeps the video area proportional while Windows resizes the real outer window frame. */
 public final class WindowsAspectRatioWindowResizer implements AutoCloseable {
@@ -28,6 +26,7 @@ public final class WindowsAspectRatioWindowResizer implements AutoCloseable {
     private static final Logger log = LoggerFactory.getLogger(WindowsAspectRatioWindowResizer.class);
 
     private static final int GWL_WNDPROC = -4;
+    private static final int WM_DESTROY = 0x0002;
     private static final int WM_NCDESTROY = 0x0082;
     private static final int WM_SIZING = 0x0214;
 
@@ -44,21 +43,9 @@ public final class WindowsAspectRatioWindowResizer implements AutoCloseable {
     private HWND handle;
     private Pointer previousWindowProc;
     private WindowProc windowProc;
-    private boolean installed;
-    private boolean fallbackInstalled;
-    private boolean correctingFallback;
-    private Rectangle lastBounds;
-    private volatile double contentAspect;
-    private volatile int logicalChromeWidth;
-    private volatile int logicalChromeHeight;
-    private volatile int logicalMinimumOuterWidth;
-    private volatile int logicalMinimumOuterHeight;
-    private final ComponentAdapter fallbackListener = new ComponentAdapter() {
-        @Override
-        public void componentResized(ComponentEvent event) {
-            correctFallbackResize();
-        }
-    };
+    private volatile boolean installed;
+    private volatile Constraints constraints = Constraints.INACTIVE;
+    private final AtomicBoolean callbackFailureLogged = new AtomicBoolean();
 
     private WindowsAspectRatioWindowResizer(Window window) {
         this.window = window;
@@ -66,7 +53,6 @@ public final class WindowsAspectRatioWindowResizer implements AutoCloseable {
 
     public static WindowsAspectRatioWindowResizer install(Window window) {
         WindowsAspectRatioWindowResizer resizer = new WindowsAspectRatioWindowResizer(window);
-        resizer.installFallback();
         if (!Platform.isWindows() || !window.isDisplayable()) {
             return resizer;
         }
@@ -87,114 +73,111 @@ public final class WindowsAspectRatioWindowResizer implements AutoCloseable {
             clearVideoFormat();
             return;
         }
-        contentAspect = (double) width / height;
-        logicalChromeWidth = Math.max(0, chromeWidth);
-        logicalChromeHeight = Math.max(0, chromeHeight);
-        logicalMinimumOuterWidth = Math.max(1, minimumOuterSize.width);
-        logicalMinimumOuterHeight = Math.max(1, minimumOuterSize.height);
-        lastBounds = window.getBounds();
+        GraphicsConfiguration configuration = window.getGraphicsConfiguration();
+        AffineTransform transform = configuration == null
+                ? new AffineTransform()
+                : configuration.getDefaultTransform();
+        DeviceMetrics metrics = scaleToDevicePixels(
+                Math.max(0, chromeWidth), Math.max(0, chromeHeight),
+                Math.max(1, minimumOuterSize.width), Math.max(1, minimumOuterSize.height),
+                transform.getScaleX(), transform.getScaleY());
+        constraints = new Constraints((double) width / height, metrics);
     }
 
     public void clearVideoFormat() {
-        contentAspect = 0;
+        constraints = Constraints.INACTIVE;
+    }
+
+    /** Returns whether this instance currently owns the native window procedure hook. */
+    public boolean isNativeActive() {
+        HWND currentHandle = handle;
+        WindowProc currentCallback = windowProc;
+        if (!installed || currentHandle == null || currentCallback == null) {
+            return false;
+        }
+        try {
+            if (!User32.INSTANCE.IsWindow(currentHandle)) {
+                clearNativeState();
+                return false;
+            }
+            Pointer callbackPointer = CallbackReference.getFunctionPointer(currentCallback);
+            return currentWindowProc(currentHandle) == Pointer.nativeValue(callbackPointer);
+        } catch (RuntimeException | LinkageError error) {
+            log.debug("Could not verify the native playback window procedure", error);
+            return false;
+        }
     }
 
     @Override
     public void close() {
-        uninstallFallback();
         if (!installed) {
             return;
         }
         try {
-            if (handle != null && previousWindowProc != null && User32.INSTANCE.IsWindow(handle)) {
-                User32.INSTANCE.SetWindowLongPtr(handle, GWL_WNDPROC, previousWindowProc);
+            if (restoreWindowProc(handle)) {
+                clearNativeState();
             }
         } catch (RuntimeException | LinkageError error) {
             log.debug("Could not restore the playback window procedure", error);
-        } finally {
-            installed = false;
-            handle = null;
-            previousWindowProc = null;
-            windowProc = null;
         }
     }
 
     private void installHook() {
-        handle = new HWND(Native.getWindowPointer(window));
-        windowProc = this::windowProc;
-        previousWindowProc = User32.INSTANCE.SetWindowLongPtr(handle, GWL_WNDPROC,
-                CallbackReference.getFunctionPointer(windowProc));
-        if (previousWindowProc == null) {
-            windowProc = null;
-            throw new IllegalStateException("Windows rejected the playback window procedure");
+        Pointer windowPointer = Native.getWindowPointer(window);
+        if (windowPointer == null || Pointer.nativeValue(windowPointer) == 0) {
+            throw new IllegalStateException("The playback window does not have a native handle");
         }
-        installed = true;
-    }
+        HWND nativeHandle = new HWND(windowPointer);
+        if (!User32.INSTANCE.IsWindow(nativeHandle)) {
+            throw new IllegalStateException("The playback window handle is not valid");
+        }
 
-    private void installFallback() {
-        if (!fallbackInstalled) {
-            lastBounds = window.getBounds();
-            window.addComponentListener(fallbackListener);
-            fallbackInstalled = true;
-        }
-    }
-
-    private void uninstallFallback() {
-        if (fallbackInstalled) {
-            window.removeComponentListener(fallbackListener);
-            fallbackInstalled = false;
-        }
-    }
-
-    private void correctFallbackResize() {
-        if (correctingFallback || contentAspect <= 0) {
-            return;
-        }
-        if (window instanceof Frame frame && (frame.getExtendedState() & Frame.MAXIMIZED_BOTH) != 0) {
-            lastBounds = window.getBounds();
-            return;
-        }
-        Rectangle proposed = window.getBounds();
-        Rectangle previous = lastBounds;
+        WindowProc nativeWindowProc = this::windowProc;
+        Pointer callbackPointer = CallbackReference.getFunctionPointer(nativeWindowProc);
+        Native.setLastError(0);
+        Pointer previous = User32.INSTANCE.SetWindowLongPtr(nativeHandle, GWL_WNDPROC, callbackPointer);
+        int installError = Native.getLastError();
         if (previous == null) {
-            lastBounds = proposed;
-            return;
+            throw new IllegalStateException("Windows rejected the playback window procedure (error "
+                    + installError + ")");
         }
-        DeviceMetrics logicalMetrics = new DeviceMetrics(
-                logicalChromeWidth, logicalChromeHeight,
-                logicalMinimumOuterWidth, logicalMinimumOuterHeight);
-        if (hasExpectedAspect(proposed, contentAspect, logicalMetrics)) {
-            lastBounds = proposed;
-            return;
+
+        long current = currentWindowProc(nativeHandle);
+        if (current != Pointer.nativeValue(callbackPointer)) {
+            User32.INSTANCE.SetWindowLongPtr(nativeHandle, GWL_WNDPROC, previous);
+            throw new IllegalStateException("The playback window procedure hook was not installed at chain head");
         }
-        int edge = inferSizingEdge(previous, proposed);
-        Rectangle corrected = constrainBounds(proposed, edge, contentAspect, logicalMetrics);
-        correctingFallback = true;
-        try {
-            window.setBounds(corrected);
-            window.validate();
-            lastBounds = corrected;
-        } finally {
-            correctingFallback = false;
-        }
+
+        handle = nativeHandle;
+        previousWindowProc = previous;
+        windowProc = nativeWindowProc;
+        installed = true;
     }
 
     private LRESULT windowProc(HWND hwnd, int message, WPARAM wParam, LPARAM lParam) {
         try {
-            if (message == WM_SIZING && contentAspect > 0 && isSizingEdge(wParam.intValue())) {
-                constrainNativeRect(lParam.toPointer(), wParam.intValue());
-                return new LRESULT(1);
+            Constraints currentConstraints = constraints;
+            if (message == WM_SIZING && currentConstraints.active() && isSizingEdge(wParam.intValue())) {
+                Pointer rect = pointerFrom(lParam);
+                if (rect != null) {
+                    constrainNativeRect(rect, wParam.intValue(), currentConstraints);
+                    return new LRESULT(1);
+                }
+            }
+            if (message == WM_DESTROY) {
+                return destroyWindow(hwnd, message, wParam, lParam);
             }
             LRESULT result = callPrevious(hwnd, message, wParam, lParam);
             if (message == WM_NCDESTROY) {
-                installed = false;
-                handle = null;
-                previousWindowProc = null;
-                windowProc = null;
+                clearNativeState();
             }
             return result;
         } catch (Throwable error) {
-            log.debug("Native playback window sizing failed", error);
+            if (callbackFailureLogged.compareAndSet(false, true)) {
+                log.warn("Native playback window message handling failed; proportional resizing is disabled",
+                        error);
+            }
+            constraints = Constraints.INACTIVE;
             return callPrevious(hwnd, message, wParam, lParam);
         }
     }
@@ -206,13 +189,78 @@ public final class WindowsAspectRatioWindowResizer implements AutoCloseable {
                 : User32.INSTANCE.CallWindowProc(previous, hwnd, message, wParam, lParam);
     }
 
-    private void constrainNativeRect(Pointer pointer, int edge) {
+    private LRESULT destroyWindow(HWND hwnd, int message, WPARAM wParam, LPARAM lParam) {
+        Pointer previous = previousWindowProc;
+        WindowProc callback = windowProc;
+        boolean restored = false;
+        try {
+            restored = restoreWindowProc(hwnd);
+            return previous == null
+                    ? User32.INSTANCE.DefWindowProc(hwnd, message, wParam, lParam)
+                    : User32.INSTANCE.CallWindowProc(previous, hwnd, message, wParam, lParam);
+        } finally {
+            // Keep the callback strongly reachable until the native invocation has returned.
+            if (callback != null && restored) {
+                clearNativeState();
+            }
+        }
+    }
+
+    private boolean restoreWindowProc(HWND hwnd) {
+        Pointer previous = previousWindowProc;
+        WindowProc callback = windowProc;
+        if (hwnd == null || previous == null || callback == null || !User32.INSTANCE.IsWindow(hwnd)) {
+            return true;
+        }
+        Pointer callbackPointer = CallbackReference.getFunctionPointer(callback);
+        if (currentWindowProc(hwnd) != Pointer.nativeValue(callbackPointer)) {
+            log.warn("The native playback window procedure is no longer at the chain head; not restoring it");
+            return false;
+        }
+        Native.setLastError(0);
+        Pointer replaced = User32.INSTANCE.SetWindowLongPtr(hwnd, GWL_WNDPROC, previous);
+        int error = Native.getLastError();
+        if (replaced == null && error != 0) {
+            throw new IllegalStateException("Could not restore the playback window procedure (error " + error + ")");
+        }
+        if (currentWindowProc(hwnd) != Pointer.nativeValue(previous)) {
+            throw new IllegalStateException("The playback window procedure was not restored");
+        }
+        return true;
+    }
+
+    private static long currentWindowProc(HWND hwnd) {
+        Native.setLastError(0);
+        long current = User32.INSTANCE.GetWindowLongPtr(hwnd, GWL_WNDPROC).longValue();
+        int error = Native.getLastError();
+        if (current == 0) {
+            throw new IllegalStateException("Could not read the playback window procedure (error " + error + ")");
+        }
+        return current;
+    }
+
+    private void clearNativeState() {
+        installed = false;
+        handle = null;
+        previousWindowProc = null;
+        windowProc = null;
+    }
+
+    static Pointer pointerFrom(LPARAM lParam) {
+        if (lParam == null || lParam.longValue() == 0) {
+            return null;
+        }
+        return new Pointer(lParam.longValue());
+    }
+
+    private static void constrainNativeRect(Pointer pointer, int edge, Constraints constraints) {
         Rectangle proposed = new Rectangle(
                 pointer.getInt(0),
                 pointer.getInt(4),
                 pointer.getInt(8) - pointer.getInt(0),
                 pointer.getInt(12) - pointer.getInt(4));
-        Rectangle constrained = constrainBounds(proposed, edge, contentAspect, deviceMetrics());
+        Rectangle constrained = constrainBounds(
+                proposed, edge, constraints.contentAspect(), constraints.deviceMetrics());
         pointer.setInt(0, constrained.x);
         pointer.setInt(4, constrained.y);
         pointer.setInt(8, constrained.x + constrained.width);
@@ -260,43 +308,6 @@ public final class WindowsAspectRatioWindowResizer implements AutoCloseable {
         };
     }
 
-    static int inferSizingEdge(Rectangle previous, Rectangle proposed) {
-        int leftDelta = Math.abs(proposed.x - previous.x);
-        int rightDelta = Math.abs(proposed.x + proposed.width - previous.x - previous.width);
-        int topDelta = Math.abs(proposed.y - previous.y);
-        int bottomDelta = Math.abs(proposed.y + proposed.height - previous.y - previous.height);
-        int horizontal = leftDelta > rightDelta ? -1 : rightDelta > 0 ? 1 : 0;
-        int vertical = topDelta > bottomDelta ? -1 : bottomDelta > 0 ? 1 : 0;
-        if (horizontal < 0 && vertical < 0) {
-            return WMSZ_TOPLEFT;
-        }
-        if (horizontal > 0 && vertical < 0) {
-            return WMSZ_TOPRIGHT;
-        }
-        if (horizontal < 0 && vertical > 0) {
-            return WMSZ_BOTTOMLEFT;
-        }
-        if (horizontal > 0 && vertical > 0) {
-            return WMSZ_BOTTOMRIGHT;
-        }
-        if (horizontal < 0) {
-            return WMSZ_LEFT;
-        }
-        if (horizontal > 0) {
-            return WMSZ_RIGHT;
-        }
-        if (vertical < 0) {
-            return WMSZ_TOP;
-        }
-        return WMSZ_BOTTOM;
-    }
-
-    private static boolean hasExpectedAspect(Rectangle bounds, double aspect, DeviceMetrics metrics) {
-        int contentWidth = Math.max(1, bounds.width - metrics.chromeWidth());
-        int contentHeight = Math.max(1, bounds.height - metrics.chromeHeight());
-        return contentWidth == (int) Math.round(contentHeight * aspect);
-    }
-
     static Dimension projectSize(int proposedWidth,
                                  int proposedHeight,
                                  double aspect,
@@ -330,17 +341,6 @@ public final class WindowsAspectRatioWindowResizer implements AutoCloseable {
         return new Dimension(Math.max(1, (int) Math.round(height * aspect)), height);
     }
 
-    private DeviceMetrics deviceMetrics() {
-        GraphicsConfiguration configuration = window.getGraphicsConfiguration();
-        AffineTransform transform = configuration == null
-                ? new AffineTransform()
-                : configuration.getDefaultTransform();
-        return scaleToDevicePixels(
-                logicalChromeWidth, logicalChromeHeight,
-                logicalMinimumOuterWidth, logicalMinimumOuterHeight,
-                transform.getScaleX(), transform.getScaleY());
-    }
-
     static DeviceMetrics scaleToDevicePixels(int chromeWidth,
                                               int chromeHeight,
                                               int minimumOuterWidth,
@@ -367,5 +367,13 @@ public final class WindowsAspectRatioWindowResizer implements AutoCloseable {
                          int chromeHeight,
                          int minimumOuterWidth,
                          int minimumOuterHeight) {
+    }
+
+    private record Constraints(double contentAspect, DeviceMetrics deviceMetrics) {
+        private static final Constraints INACTIVE = new Constraints(0, new DeviceMetrics(0, 0, 1, 1));
+
+        private boolean active() {
+            return contentAspect > 0 && Double.isFinite(contentAspect);
+        }
     }
 }

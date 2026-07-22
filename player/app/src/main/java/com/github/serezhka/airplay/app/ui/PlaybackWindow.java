@@ -124,14 +124,16 @@ final class PlaybackWindow extends JFrame {
         if (sessionAddress != null) {
             sessionLabel.setToolTipText(i18n.text("player.device", sessionAddress));
         }
+        SwingUtilities.invokeLater(this::updateAspectResizer);
     }
 
     void closeWindow() {
-        if (aspectResizer != null) {
-            aspectResizer.close();
-            aspectResizer = null;
+        WindowsAspectRatioWindowResizer currentResizer = aspectResizer;
+        if (currentResizer != null) {
+            currentResizer.close();
         }
         dispose();
+        aspectResizer = null;
     }
 
     private void buildUi() {
@@ -178,6 +180,8 @@ final class PlaybackWindow extends JFrame {
     }
 
     private void installBehavior() {
+        addPropertyChangeListener("graphicsConfiguration", event ->
+                SwingUtilities.invokeLater(this::updateAspectResizer));
         addWindowListener(new WindowAdapter() {
             @Override
             public void windowClosing(WindowEvent event) {
@@ -251,6 +255,7 @@ final class PlaybackWindow extends JFrame {
     private void ensureAspectResizer() {
         if (aspectResizer == null) {
             aspectResizer = WindowsAspectRatioWindowResizer.install(this);
+            setResizable(aspectResizer.isNativeActive());
         }
     }
 
@@ -288,7 +293,7 @@ final class PlaybackWindow extends JFrame {
     }
 
     private String playbackTitle() {
-        return i18n.text("player.windowTitle");
+        return "AirPlay Receiver";
     }
 
     static Dimension fitVideoSize(int sourceWidth,
