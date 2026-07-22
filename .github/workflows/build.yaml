@@ -104,7 +104,10 @@ jobs:
           "Windows installer: $([math]::Round($installer.Length / 1MB, 1)) MiB" | Write-Host
           if ($installer.Length -gt 300MB) { throw 'Windows installer exceeded the 300 MiB packaging limit' }
           $install = Start-Process -FilePath $installer.FullName -Wait -PassThru -ArgumentList '/quiet','/norestart'
-          if ($install.ExitCode -ne 0) { throw "Installer smoke test failed with exit code $($install.ExitCode)" }
+          if ($install.ExitCode -ne 0) {
+            Write-Host "::error title=Installer smoke test failed::Installer exit code $($install.ExitCode)"
+            throw "Installer smoke test failed with exit code $($install.ExitCode)"
+          }
           $versionMatch = Select-String -Path '.\build.gradle' -Pattern "version = '([^']+)'"
           $expectedVersion = $versionMatch.Matches[0].Groups[1].Value
           $expectedDisplayName = "AirPlay Receiver $expectedVersion"
@@ -118,7 +121,16 @@ jobs:
             ForEach-Object { Get-ChildItem $_ | Get-ItemProperty } |
             Where-Object { $_.DisplayName -eq $expectedDisplayName } |
             Select-Object -First 1
-          if (!$installedEntry) { throw "Control Panel entry '$expectedDisplayName' was not registered" }
+          if (!$installedEntry) {
+            $airPlayEntries = $uninstallRoots |
+              Where-Object { Test-Path $_ } |
+              ForEach-Object { Get-ChildItem $_ | Get-ItemProperty } |
+              Where-Object { $_.DisplayName -like '*AirPlay*' } |
+              ForEach-Object { "$($_.DisplayName) [$($_.DisplayVersion)]" }
+            $actualEntries = $airPlayEntries -join '; '
+            Write-Host "::error title=Control Panel name mismatch::Expected '$expectedDisplayName'; found '$actualEntries'"
+            throw "Control Panel entry '$expectedDisplayName' was not registered"
+          }
           if ($installedEntry.DisplayVersion -ne $expectedVersion) {
             throw "Unexpected installed version: $($installedEntry.DisplayVersion)"
           }
@@ -130,6 +142,7 @@ jobs:
           $installedSelfTest = Start-Process -FilePath $installedApp -Wait -PassThru -ArgumentList '--self-test'
           if ($installedSelfTest.ExitCode -ne 0) { throw "Installed self-test failed with exit code $($installedSelfTest.ExitCode)" }
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: airplay-receiver-windows-x64
           path: player/app/build/package/installer/*.exe
