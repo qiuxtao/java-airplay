@@ -72,7 +72,7 @@ public final class MainFrame extends JFrame implements ReceiverView {
     private ServerState serverState = ServerState.STOPPED;
 
     public MainFrame(ReceiverController controller, I18n i18n) {
-        super("AirPlay Receiver");
+        super(AppVersion.productName());
         this.controller = controller;
         this.i18n = i18n;
         this.settings = controller.settings();

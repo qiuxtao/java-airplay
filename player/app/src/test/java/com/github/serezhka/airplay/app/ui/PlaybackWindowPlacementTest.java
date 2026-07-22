@@ -10,11 +10,11 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 class PlaybackWindowPlacementTest {
 
     @Test
-    void initialWindowSizeExactlyMatchesThePhoneAspect() {
-        Dimension window = PlaybackWindow.fitWindowSize(1179, 2556, 1884, 1004);
+    void initialVideoAreaExactlyMatchesThePhoneAspectWithoutSideBars() {
+        Dimension video = PlaybackWindow.fitVideoSize(1179, 2556, 1884, 944);
 
-        assertEquals(1004, window.height);
-        assertEquals(window.width, (int) Math.round(window.height * (1179d / 2556d)));
+        assertEquals(944, video.height);
+        assertEquals(video.width, (int) Math.round(video.height * (1179d / 2556d)));
     }
 
     @Test

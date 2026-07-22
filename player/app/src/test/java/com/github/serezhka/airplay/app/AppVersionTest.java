@@ -11,5 +11,6 @@ class AppVersionTest {
     void alwaysProvidesAVisibleVersion() {
         assertFalse(AppVersion.current().isBlank());
         assertTrue(AppVersion.display().startsWith("v"));
+        assertTrue(AppVersion.productName().contains(AppVersion.display()));
     }
 }
