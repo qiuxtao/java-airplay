@@ -22,7 +22,7 @@ public final class PlayerApp {
     public static void main(String[] args) throws Exception {
         Files.createDirectories(AppPaths.logsDirectory());
         System.setProperty("APP_LOG_DIR", AppPaths.logsDirectory().toString());
-        System.setProperty("apple.awt.application.name", AppVersion.productName());
+        System.setProperty("apple.awt.application.name", "AirPlay Receiver");
 
         if (Arrays.asList(args).contains("--self-test")) {
             runSelfTest();
@@ -48,7 +48,7 @@ public final class PlayerApp {
             String details = error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
             SwingUtilities.invokeAndWait(() -> JOptionPane.showMessageDialog(null,
                     i18n.text("error.mediaRuntime", details),
-                    AppVersion.productName(), JOptionPane.ERROR_MESSAGE));
+                    "AirPlay Receiver", JOptionPane.ERROR_MESSAGE));
             System.exit(1);
         }
     }

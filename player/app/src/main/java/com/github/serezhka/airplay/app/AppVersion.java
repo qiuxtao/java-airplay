@@ -17,7 +17,4 @@ public final class AppVersion {
         return "v" + current();
     }
 
-    public static String productName() {
-        return "AirPlay Receiver " + display();
-    }
 }

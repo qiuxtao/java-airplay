@@ -3,7 +3,6 @@ package com.github.serezhka.airplay.app.ui;
 import com.formdev.flatlaf.FlatClientProperties;
 import com.formdev.flatlaf.extras.FlatSVGIcon;
 import com.github.serezhka.airplay.app.ReceiverController;
-import com.github.serezhka.airplay.app.AppVersion;
 import com.github.serezhka.airplay.app.i18n.I18n;
 import com.github.serezhka.airplay.app.platform.WindowsAspectRatioWindowResizer;
 import com.github.serezhka.airplay.app.settings.AppSettings;
@@ -59,7 +58,7 @@ final class PlaybackWindow extends JFrame {
     private int sourceHeight;
 
     PlaybackWindow(ReceiverController controller, I18n i18n) {
-        super(AppVersion.productName());
+        super("AirPlay Receiver");
         this.controller = controller;
         this.i18n = i18n;
         this.volume = new JSlider(0, 100, (int) Math.round(controller.settings().volume() * 100));
@@ -289,7 +288,7 @@ final class PlaybackWindow extends JFrame {
     }
 
     private String playbackTitle() {
-        return i18n.text("player.windowTitle") + " " + AppVersion.display();
+        return i18n.text("player.windowTitle");
     }
 
     static Dimension fitVideoSize(int sourceWidth,

@@ -14,9 +14,12 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.awt.Dimension;
+import java.awt.Frame;
 import java.awt.GraphicsConfiguration;
 import java.awt.Rectangle;
 import java.awt.Window;
+import java.awt.event.ComponentAdapter;
+import java.awt.event.ComponentEvent;
 import java.awt.geom.AffineTransform;
 
 /** Keeps the video area proportional while Windows resizes the real outer window frame. */
@@ -42,11 +45,20 @@ public final class WindowsAspectRatioWindowResizer implements AutoCloseable {
     private Pointer previousWindowProc;
     private WindowProc windowProc;
     private boolean installed;
+    private boolean fallbackInstalled;
+    private boolean correctingFallback;
+    private Rectangle lastBounds;
     private volatile double contentAspect;
     private volatile int logicalChromeWidth;
     private volatile int logicalChromeHeight;
     private volatile int logicalMinimumOuterWidth;
     private volatile int logicalMinimumOuterHeight;
+    private final ComponentAdapter fallbackListener = new ComponentAdapter() {
+        @Override
+        public void componentResized(ComponentEvent event) {
+            correctFallbackResize();
+        }
+    };
 
     private WindowsAspectRatioWindowResizer(Window window) {
         this.window = window;
@@ -54,6 +66,7 @@ public final class WindowsAspectRatioWindowResizer implements AutoCloseable {
 
     public static WindowsAspectRatioWindowResizer install(Window window) {
         WindowsAspectRatioWindowResizer resizer = new WindowsAspectRatioWindowResizer(window);
+        resizer.installFallback();
         if (!Platform.isWindows() || !window.isDisplayable()) {
             return resizer;
         }
@@ -79,6 +92,7 @@ public final class WindowsAspectRatioWindowResizer implements AutoCloseable {
         logicalChromeHeight = Math.max(0, chromeHeight);
         logicalMinimumOuterWidth = Math.max(1, minimumOuterSize.width);
         logicalMinimumOuterHeight = Math.max(1, minimumOuterSize.height);
+        lastBounds = window.getBounds();
     }
 
     public void clearVideoFormat() {
@@ -87,6 +101,7 @@ public final class WindowsAspectRatioWindowResizer implements AutoCloseable {
 
     @Override
     public void close() {
+        uninstallFallback();
         if (!installed) {
             return;
         }
@@ -114,6 +129,54 @@ public final class WindowsAspectRatioWindowResizer implements AutoCloseable {
             throw new IllegalStateException("Windows rejected the playback window procedure");
         }
         installed = true;
+    }
+
+    private void installFallback() {
+        if (!fallbackInstalled) {
+            lastBounds = window.getBounds();
+            window.addComponentListener(fallbackListener);
+            fallbackInstalled = true;
+        }
+    }
+
+    private void uninstallFallback() {
+        if (fallbackInstalled) {
+            window.removeComponentListener(fallbackListener);
+            fallbackInstalled = false;
+        }
+    }
+
+    private void correctFallbackResize() {
+        if (correctingFallback || contentAspect <= 0) {
+            return;
+        }
+        if (window instanceof Frame frame && (frame.getExtendedState() & Frame.MAXIMIZED_BOTH) != 0) {
+            lastBounds = window.getBounds();
+            return;
+        }
+        Rectangle proposed = window.getBounds();
+        Rectangle previous = lastBounds;
+        if (previous == null) {
+            lastBounds = proposed;
+            return;
+        }
+        DeviceMetrics logicalMetrics = new DeviceMetrics(
+                logicalChromeWidth, logicalChromeHeight,
+                logicalMinimumOuterWidth, logicalMinimumOuterHeight);
+        if (hasExpectedAspect(proposed, contentAspect, logicalMetrics)) {
+            lastBounds = proposed;
+            return;
+        }
+        int edge = inferSizingEdge(previous, proposed);
+        Rectangle corrected = constrainBounds(proposed, edge, contentAspect, logicalMetrics);
+        correctingFallback = true;
+        try {
+            window.setBounds(corrected);
+            window.validate();
+            lastBounds = corrected;
+        } finally {
+            correctingFallback = false;
+        }
     }
 
     private LRESULT windowProc(HWND hwnd, int message, WPARAM wParam, LPARAM lParam) {
@@ -195,6 +258,43 @@ public final class WindowsAspectRatioWindowResizer implements AutoCloseable {
                     outerWidth, outerHeight);
             default -> proposed;
         };
+    }
+
+    static int inferSizingEdge(Rectangle previous, Rectangle proposed) {
+        int leftDelta = Math.abs(proposed.x - previous.x);
+        int rightDelta = Math.abs(proposed.x + proposed.width - previous.x - previous.width);
+        int topDelta = Math.abs(proposed.y - previous.y);
+        int bottomDelta = Math.abs(proposed.y + proposed.height - previous.y - previous.height);
+        int horizontal = leftDelta > rightDelta ? -1 : rightDelta > 0 ? 1 : 0;
+        int vertical = topDelta > bottomDelta ? -1 : bottomDelta > 0 ? 1 : 0;
+        if (horizontal < 0 && vertical < 0) {
+            return WMSZ_TOPLEFT;
+        }
+        if (horizontal > 0 && vertical < 0) {
+            return WMSZ_TOPRIGHT;
+        }
+        if (horizontal < 0 && vertical > 0) {
+            return WMSZ_BOTTOMLEFT;
+        }
+        if (horizontal > 0 && vertical > 0) {
+            return WMSZ_BOTTOMRIGHT;
+        }
+        if (horizontal < 0) {
+            return WMSZ_LEFT;
+        }
+        if (horizontal > 0) {
+            return WMSZ_RIGHT;
+        }
+        if (vertical < 0) {
+            return WMSZ_TOP;
+        }
+        return WMSZ_BOTTOM;
+    }
+
+    private static boolean hasExpectedAspect(Rectangle bounds, double aspect, DeviceMetrics metrics) {
+        int contentWidth = Math.max(1, bounds.width - metrics.chromeWidth());
+        int contentHeight = Math.max(1, bounds.height - metrics.chromeHeight());
+        return contentWidth == (int) Math.round(contentHeight * aspect);
     }
 
     static Dimension projectSize(int proposedWidth,

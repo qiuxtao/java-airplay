@@ -105,6 +105,23 @@ jobs:
           if ($installer.Length -gt 300MB) { throw 'Windows installer exceeded the 300 MiB packaging limit' }
           $install = Start-Process -FilePath $installer.FullName -Wait -PassThru -ArgumentList '/quiet','/norestart'
           if ($install.ExitCode -ne 0) { throw "Installer smoke test failed with exit code $($install.ExitCode)" }
+          $versionMatch = Select-String -Path '.\build.gradle' -Pattern "version = '([^']+)'"
+          $expectedVersion = $versionMatch.Matches[0].Groups[1].Value
+          $expectedDisplayName = "AirPlay Receiver $expectedVersion"
+          $uninstallRoots = @(
+            'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall',
+            'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall',
+            'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
+          )
+          $installedEntry = $uninstallRoots |
+            Where-Object { Test-Path $_ } |
+            ForEach-Object { Get-ChildItem $_ | Get-ItemProperty } |
+            Where-Object { $_.DisplayName -eq $expectedDisplayName } |
+            Select-Object -First 1
+          if (!$installedEntry) { throw "Control Panel entry '$expectedDisplayName' was not registered" }
+          if ($installedEntry.DisplayVersion -ne $expectedVersion) {
+            throw "Unexpected installed version: $($installedEntry.DisplayVersion)"
+          }
       - name: Verify installed application
         shell: pwsh
         run: |

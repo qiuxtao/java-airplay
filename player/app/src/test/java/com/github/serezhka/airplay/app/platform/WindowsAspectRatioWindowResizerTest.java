@@ -53,6 +53,21 @@ class WindowsAspectRatioWindowResizerTest {
         assertEquals(new WindowsAspectRatioWindowResizer.DeviceMetrics(24, 90, 654, 1211), metrics);
     }
 
+    @Test
+    void infersTheActualDraggedWindowBorderForFallbackCorrection() {
+        Rectangle previous = new Rectangle(100, 100, 500, 900);
+
+        assertEquals(WindowsAspectRatioWindowResizer.WMSZ_RIGHT,
+                WindowsAspectRatioWindowResizer.inferSizingEdge(
+                        previous, new Rectangle(100, 100, 620, 900)));
+        assertEquals(WindowsAspectRatioWindowResizer.WMSZ_TOPLEFT,
+                WindowsAspectRatioWindowResizer.inferSizingEdge(
+                        previous, new Rectangle(60, 40, 540, 960)));
+        assertEquals(WindowsAspectRatioWindowResizer.WMSZ_BOTTOM,
+                WindowsAspectRatioWindowResizer.inferSizingEdge(
+                        previous, new Rectangle(100, 100, 500, 980)));
+    }
+
     private void assertVideoAspect(Rectangle outerBounds) {
         int videoWidth = outerBounds.width - METRICS.chromeWidth();
         int videoHeight = outerBounds.height - METRICS.chromeHeight();

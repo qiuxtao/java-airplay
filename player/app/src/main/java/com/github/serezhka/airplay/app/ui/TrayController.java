@@ -1,7 +1,6 @@
 package com.github.serezhka.airplay.app.ui;
 
 import com.github.serezhka.airplay.app.i18n.I18n;
-import com.github.serezhka.airplay.app.AppVersion;
 import com.github.serezhka.airplay.server.ServerState;
 import lombok.extern.slf4j.Slf4j;
 
@@ -57,7 +56,7 @@ final class TrayController implements AutoCloseable {
         }
 
         popupWindow = buildPopupWindow();
-        TrayIcon createdIcon = new TrayIcon(createIcon(), AppVersion.productName());
+        TrayIcon createdIcon = new TrayIcon(createIcon(), "AirPlay Receiver");
         createdIcon.setImageAutoSize(true);
         createdIcon.addActionListener(event -> frame.restoreAndShow());
         createdIcon.addMouseListener(new MouseAdapter() {
