@@ -34,6 +34,7 @@ public final class AudioServer {
 
     public synchronized void start(AirPlayConsumer consumer) throws InterruptedException {
         if (channel != null && channel.isOpen()) {
+            reset("repeated audio SETUP");
             return;
         }
         workerGroup = eventLoopGroup();
@@ -71,6 +72,25 @@ public final class AudioServer {
             workerGroup = null;
         }
         port = 0;
+    }
+
+    public synchronized void reset(String reason) {
+        Channel currentChannel = channel;
+        if (currentChannel == null || !currentChannel.isOpen()) {
+            return;
+        }
+
+        Runnable resetTask = () -> {
+            AudioHandler handler = currentChannel.pipeline().get(AudioHandler.class);
+            if (handler != null) {
+                handler.reset(reason);
+            }
+        };
+        if (currentChannel.eventLoop().inEventLoop()) {
+            resetTask.run();
+        } else {
+            currentChannel.eventLoop().submit(resetTask).syncUninterruptibly();
+        }
     }
 
     private EventLoopGroup eventLoopGroup() {

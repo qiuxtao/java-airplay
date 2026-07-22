@@ -19,11 +19,8 @@ public class AudioDecoder extends MessageToMessageDecoder<ByteBuf> {
 
         int seqNumber = ((headerBytes[2] & 0xFF) << 8) | (headerBytes[3] & 0xFF);
 
-        long timestamp = (headerBytes[7] & 0xFF) | ((headerBytes[6] & 0xFF) << 8) |
-                ((headerBytes[5] & 0xFF) << 16) | ((headerBytes[4] & 0xFF) << 24);
-
-        long ssrc = (headerBytes[11] & 0xFF) | ((headerBytes[6] & 0xFF) << 8) |
-                ((headerBytes[9] & 0xFF) << 16) | ((headerBytes[8] & 0xFF) << 24);
+        long timestamp = readUnsignedInt(headerBytes, 4);
+        long ssrc = readUnsignedInt(headerBytes, 8);
 
         AudioPacket audioPacket = AudioPacket.builder()
                 .flag(flag)
@@ -36,5 +33,12 @@ public class AudioDecoder extends MessageToMessageDecoder<ByteBuf> {
                 .build();
         audioPacket.encodedAudio(packet -> msg.readBytes(packet, 0, msg.readableBytes()));
         out.add(audioPacket);
+    }
+
+    private static long readUnsignedInt(byte[] bytes, int offset) {
+        return ((long) (bytes[offset] & 0xFF) << 24)
+                | ((long) (bytes[offset + 1] & 0xFF) << 16)
+                | ((long) (bytes[offset + 2] & 0xFF) << 8)
+                | (bytes[offset + 3] & 0xFFL);
     }
 }
