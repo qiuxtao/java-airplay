@@ -155,12 +155,18 @@ public final class WindowsAspectRatioWindowResizer implements AutoCloseable {
     }
 
     private LRESULT windowProc(HWND hwnd, int message, WPARAM wParam, LPARAM lParam) {
+        boolean sizingForwarded = false;
         try {
             Constraints currentConstraints = constraints;
             if (message == WM_SIZING && currentConstraints.active() && isSizingEdge(wParam.intValue())) {
                 Pointer rect = pointerFrom(lParam);
                 if (rect != null) {
                     constrainNativeRect(rect, wParam.intValue(), currentConstraints);
+                    // AWT performs live container layout from WM_SIZING.  The rectangle is
+                    // already constrained, but the message must still travel through the
+                    // FlatLaf/AWT chain so the embedded video component receives its new size.
+                    sizingForwarded = true;
+                    callPrevious(hwnd, message, wParam, lParam);
                     return new LRESULT(1);
                 }
             }
@@ -178,7 +184,7 @@ public final class WindowsAspectRatioWindowResizer implements AutoCloseable {
                         error);
             }
             constraints = Constraints.INACTIVE;
-            return callPrevious(hwnd, message, wParam, lParam);
+            return sizingForwarded ? new LRESULT(0) : callPrevious(hwnd, message, wParam, lParam);
         }
     }
 

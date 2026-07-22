@@ -12,15 +12,22 @@ import com.sun.jna.platform.win32.WinDef.HWND;
 import com.sun.jna.platform.win32.WinDef.LPARAM;
 import com.sun.jna.platform.win32.WinDef.LRESULT;
 import com.sun.jna.platform.win32.WinDef.WPARAM;
+import com.sun.jna.platform.win32.WinUser.WindowProc;
 import org.junit.jupiter.api.Test;
 
 import javax.swing.JFrame;
+import javax.swing.JPanel;
 import javax.swing.SwingUtilities;
+import java.awt.BorderLayout;
 import java.awt.Dimension;
 import java.awt.GraphicsEnvironment;
 import java.awt.Rectangle;
+import java.awt.event.ComponentAdapter;
+import java.awt.event.ComponentEvent;
 import java.awt.geom.AffineTransform;
+import java.lang.ref.Reference;
 import java.lang.reflect.InvocationTargetException;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -33,6 +40,120 @@ class WindowsAspectRatioWindowResizerIntegrationTest {
 
     private static final int GWL_WNDPROC = -4;
     private static final int WM_SIZING = 0x0214;
+    private static final int SWP_NOMOVE = 0x0002;
+    private static final int SWP_NOZORDER = 0x0004;
+    private static final int SWP_NOACTIVATE = 0x0010;
+
+    @Test
+    void forwardsConstrainedSizingToTheFlatLafAndAwtWindowProcedureChain() throws Exception {
+        assumeTrue(Platform.isWindows(), "native integration test only runs on Windows");
+        assertFalse(GraphicsEnvironment.isHeadless(),
+                "Windows native-resize CI must provide a non-headless desktop session");
+
+        FlatLightLaf.setup();
+        AtomicInteger awtResizeEvents = new AtomicInteger();
+        AtomicReference<JPanel> videoHost = new AtomicReference<>();
+        AtomicReference<JPanel> videoSurface = new AtomicReference<>();
+        AtomicReference<JPanel> renderSurface = new AtomicReference<>();
+        JFrame frame = onEdt(() -> {
+            JFrame created = new JFrame("native sizing chain integration test");
+            created.setBounds(-10_000, -10_000, 620, 1050);
+            JPanel player = new JPanel(new BorderLayout());
+            JPanel host = new JPanel(new BorderLayout());
+            JPanel surface = new JPanel(null);
+            JPanel render = new JPanel();
+            surface.add(render);
+            surface.addComponentListener(new ComponentAdapter() {
+                @Override
+                public void componentResized(ComponentEvent event) {
+                    render.setBounds(0, 0, surface.getWidth(), surface.getHeight());
+                }
+            });
+            host.add(surface, BorderLayout.CENTER);
+            player.add(host, BorderLayout.CENTER);
+            created.setContentPane(player);
+            videoHost.set(host);
+            videoSurface.set(surface);
+            renderSurface.set(render);
+            created.addComponentListener(new ComponentAdapter() {
+                @Override
+                public void componentResized(ComponentEvent event) {
+                    awtResizeEvents.incrementAndGet();
+                }
+            });
+            created.setVisible(true);
+            return created;
+        });
+        onEdt(() -> {
+            awtResizeEvents.set(0);
+            return null;
+        });
+        Dimension initialVideoSize = onEdt(() -> videoSurface.get().getSize());
+        HWND hwnd = new HWND(Native.getWindowPointer(frame));
+        Pointer originalWindowProc = User32.INSTANCE.GetWindowLongPtr(hwnd, GWL_WNDPROC).toPointer();
+        AtomicInteger forwardedSizingMessages = new AtomicInteger();
+        WindowProc probe = (window, message, wParam, lParam) -> {
+            if (message == WM_SIZING) {
+                forwardedSizingMessages.incrementAndGet();
+            }
+            return User32.INSTANCE.CallWindowProc(originalWindowProc, window, message, wParam, lParam);
+        };
+        Pointer probePointer = com.sun.jna.CallbackReference.getFunctionPointer(probe);
+        Pointer replaced = User32.INSTANCE.SetWindowLongPtr(hwnd, GWL_WNDPROC, probePointer);
+        assertEquals(Pointer.nativeValue(originalWindowProc), Pointer.nativeValue(replaced));
+        assertEquals(Pointer.nativeValue(probePointer), currentWindowProc(hwnd));
+        WindowsAspectRatioWindowResizer resizer = null;
+
+        try {
+            resizer = onEdt(() -> WindowsAspectRatioWindowResizer.install(frame));
+            WindowsAspectRatioWindowResizer installedResizer = resizer;
+            onEdt(() -> {
+                installedResizer.setVideoFormat(9, 16, 16, 60, new Dimension(436, 807));
+                return null;
+            });
+
+            Rectangle constrained = sendSizing(hwnd, WindowsAspectRatioWindowResizer.WMSZ_BOTTOMRIGHT,
+                    new Rectangle(100, 100, 760, 970));
+            assertTrue(User32.INSTANCE.SetWindowPos(hwnd, null, 0, 0,
+                    constrained.width, constrained.height,
+                    SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE));
+            // The top-level dynamic layout can enqueue the video surface's own resize
+            // event while the first EDT turn is running, just as GstVideoComponent does.
+            onEdt(() -> null);
+            LayoutSizes layout = onEdt(() -> new LayoutSizes(
+                    frame.getContentPane().getSize(), videoHost.get().getSize(),
+                    videoSurface.get().getSize(), renderSurface.get().getSize()));
+
+            assertEquals(1, forwardedSizingMessages.get(),
+                    "the constrained WM_SIZING message must reach FlatLaf/AWT exactly once");
+            assertTrue(awtResizeEvents.get() > 0,
+                    "AWT must receive the live resize event that drives embedded video layout");
+            assertNotEquals(initialVideoSize, layout.videoSurface(),
+                    "the embedded video surface must change size with the native window");
+            assertEquals(layout.content(), layout.videoHost());
+            assertEquals(layout.videoHost(), layout.videoSurface());
+            assertEquals(layout.videoSurface(), layout.renderSurface(),
+                    "the GstVideoComponent-like render child must fill the resized surface");
+            assertNativeAspect(constrained, frame, 9d / 16d);
+        } finally {
+            if (resizer != null) {
+                WindowsAspectRatioWindowResizer resizerToClose = resizer;
+                onEdt(() -> {
+                    resizerToClose.close();
+                    return null;
+                });
+            }
+            if (User32.INSTANCE.IsWindow(hwnd)) {
+                User32.INSTANCE.SetWindowLongPtr(hwnd, GWL_WNDPROC, originalWindowProc);
+            }
+            onEdt(() -> {
+                frame.dispose();
+                return null;
+            });
+            // Keep the native callback strongly reachable through restoration and disposal.
+            Reference.reachabilityFence(probe);
+        }
+    }
 
     @Test
     void realFlatLafFrameConstrainsWmSizingSynchronouslyAndRestoresWindowProc() throws Exception {
@@ -183,5 +304,11 @@ class WindowsAspectRatioWindowResizerIntegrationTest {
     @FunctionalInterface
     private interface EdtSupplier<T> {
         T get() throws Exception;
+    }
+
+    private record LayoutSizes(Dimension content,
+                               Dimension videoHost,
+                               Dimension videoSurface,
+                               Dimension renderSurface) {
     }
 }
