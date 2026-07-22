@@ -34,8 +34,8 @@ def packageInput = layout.buildDirectory.dir('package/input')
 def packageImage = layout.buildDirectory.dir('package/image')
 def packageStagedImage = layout.buildDirectory.dir('package/staged-image')
 def packageInstaller = layout.buildDirectory.dir('package/installer')
-def installerDisplayName = "AirPlay Receiver ${project.version}"
 def windowsUpgradeUuid = 'd5576768-02f3-4541-bc01-d700c679b5b2'
+def windowsResources = layout.projectDirectory.dir('src/jpackage/windows')
 def isWindows = System.getProperty('os.name').toLowerCase(Locale.ROOT).contains('windows')
 
 // The upstream Windows runtime also contains headers, static/import libraries,
@@ -192,7 +192,7 @@ tasks.register('packageWindows', Exec) {
     onlyIf { isWindows }
     inputs.dir packageStagedImage
     inputs.property 'appVersion', project.version.toString()
-    inputs.property 'installerDisplayName', installerDisplayName
+    inputs.dir windowsResources
     outputs.dir packageInstaller
     doFirst {
         delete packageInstaller
@@ -201,13 +201,14 @@ tasks.register('packageWindows', Exec) {
         }.get().metadata.installationPath.file('bin/jpackage.exe').asFile
         def arguments = [
                 '--type', 'exe',
-                '--name', installerDisplayName,
+                '--name', 'AirPlay Receiver',
                 '--dest', packageInstaller.get().asFile,
                 '--app-image', packageStagedImage.get().dir('AirPlay Receiver').asFile,
                 '--app-version', project.version.toString(),
                 '--vendor', 'java-airplay',
                 '--win-per-user-install',
                 '--win-upgrade-uuid', windowsUpgradeUuid,
+                '--resource-dir', windowsResources.asFile,
                 // Keep binaries away from %LOCALAPPDATA%\AirPlay Receiver, which is
                 // intentionally reserved for logs that must survive an uninstall.
                 '--install-dir', 'AirPlay Receiver App',
