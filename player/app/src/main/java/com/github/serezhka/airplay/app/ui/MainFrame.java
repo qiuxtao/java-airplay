@@ -3,6 +3,7 @@ package com.github.serezhka.airplay.app.ui;
 import com.formdev.flatlaf.extras.FlatSVGIcon;
 import com.formdev.flatlaf.FlatLaf;
 import com.github.serezhka.airplay.app.AppPaths;
+import com.github.serezhka.airplay.app.AppVersion;
 import com.github.serezhka.airplay.app.ReceiverController;
 import com.github.serezhka.airplay.app.ReceiverView;
 import com.github.serezhka.airplay.app.i18n.I18n;
@@ -201,7 +202,14 @@ public final class MainFrame extends JFrame implements ReceiverView {
         JLabel product = new JLabel("  AirPlay Receiver", new FlatSVGIcon("icons/app.svg", 32, 32),
                 SwingConstants.LEFT);
         product.setFont(product.getFont().deriveFont(Font.BOLD, 17f));
-        appBar.add(product, BorderLayout.WEST);
+        JPanel identity = new JPanel(new FlowLayout(FlowLayout.LEFT, 9, 0));
+        identity.setOpaque(false);
+        identity.add(product);
+        JLabel version = new JLabel(AppVersion.display());
+        version.putClientProperty("FlatLaf.styleClass", "small");
+        version.putClientProperty("FlatLaf.style", "foreground: $Label.disabledForeground");
+        identity.add(version);
+        appBar.add(identity, BorderLayout.WEST);
 
         JPanel actions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
         actions.setOpaque(false);

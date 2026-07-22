@@ -24,7 +24,9 @@ application {
 jar {
     archiveBaseName = 'airplay-receiver'
     manifest {
-        attributes 'Main-Class': application.mainClass.get()
+        attributes 'Main-Class': application.mainClass.get(),
+                'Implementation-Title': 'AirPlay Receiver',
+                'Implementation-Version': project.version.toString()
     }
 }
 

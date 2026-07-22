@@ -64,7 +64,6 @@ final class PlaybackWindow extends JFrame {
         this.volume = new JSlider(0, 100, (int) Math.round(controller.settings().volume() * 100));
         this.resizeGlassPane = new AspectRatioResizeGlassPane(
                 this,
-                player,
                 this::sourceAspect,
                 () -> activeSession && sourceWidth > 0 && sourceHeight > 0);
         setDefaultCloseOperation(DO_NOTHING_ON_CLOSE);
@@ -219,24 +218,19 @@ final class PlaybackWindow extends JFrame {
                     .getDefaultScreenDevice().getDefaultConfiguration();
         }
         Rectangle screen = usableScreenBounds(configuration);
-        int chromeWidth = chromeWidth();
-        int chromeHeight = chromeHeight();
-        int availableWidth = Math.max(1, screen.width - SCREEN_GAP * 2 - chromeWidth);
-        int availableHeight = Math.max(1, screen.height - SCREEN_GAP * 2 - chromeHeight);
-        double scale = Math.min((double) availableWidth / width, (double) availableHeight / height);
-        Dimension target = new Dimension(
-                Math.max(1, (int) Math.round(width * scale)),
-                Math.max(1, (int) Math.round(height * scale)));
-        Dimension minimum = minimumVideoSize(width, height, screen, chromeWidth, chromeHeight);
+        int availableWidth = Math.max(1, screen.width - SCREEN_GAP * 2);
+        int availableHeight = Math.max(1, screen.height - SCREEN_GAP * 2);
+        Dimension target = fitWindowSize(width, height, availableWidth, availableHeight);
+        Dimension minimum = minimumWindowSize(width, height, screen);
         if (target.width < minimum.width || target.height < minimum.height) {
             target = minimum;
         }
-        setMinimumSize(frameSizeForVideo(minimum));
+        setMinimumSize(minimum);
         applyVideoSize(target, screen);
     }
 
     private void applyVideoSize(Dimension videoSize, Rectangle usableScreen) {
-        setBounds(sideWindowBounds(frameSizeForVideo(videoSize), usableScreen, SCREEN_GAP));
+        setBounds(sideWindowBounds(videoSize, usableScreen, SCREEN_GAP));
     }
 
     static Rectangle sideWindowBounds(Dimension windowSize, Rectangle usableScreen, int gap) {
@@ -278,6 +272,19 @@ final class PlaybackWindow extends JFrame {
         }
     }
 
+    static Dimension fitWindowSize(int sourceWidth,
+                                   int sourceHeight,
+                                   int availableWidth,
+                                   int availableHeight) {
+        double aspect = (double) sourceWidth / sourceHeight;
+        int height = Math.max(1, Math.min(availableHeight, (int) Math.floor(availableWidth / aspect)));
+        int width = Math.max(1, (int) Math.round(height * aspect));
+        while (width > availableWidth && height > 1) {
+            width = Math.max(1, (int) Math.round(--height * aspect));
+        }
+        return new Dimension(width, height);
+    }
+
     private double sourceAspect() {
         return sourceWidth > 0 && sourceHeight > 0 ? (double) sourceWidth / sourceHeight : 1d;
     }
@@ -292,14 +299,12 @@ final class PlaybackWindow extends JFrame {
                 bounds.height - insets.top - insets.bottom);
     }
 
-    private Dimension minimumVideoSize(int width,
-                                       int height,
-                                       Rectangle screen,
-                                       int chromeWidth,
-                                       int chromeHeight) {
+    private Dimension minimumWindowSize(int width,
+                                        int height,
+                                        Rectangle screen) {
         double aspect = (double) width / height;
-        int maximumWidth = Math.max(280, (int) (screen.width * 0.82) - chromeWidth);
-        int maximumHeight = Math.max(280, (int) (screen.height * 0.82) - chromeHeight);
+        int maximumWidth = Math.max(280, (int) (screen.width * 0.82));
+        int maximumHeight = Math.max(280, (int) (screen.height * 0.82));
         int minimumWidth;
         int minimumHeight;
         if (aspect < 1) {
@@ -310,28 +315,9 @@ final class PlaybackWindow extends JFrame {
             minimumWidth = (int) Math.round(minimumHeight * aspect);
         }
         if (minimumWidth > maximumWidth || minimumHeight > maximumHeight) {
-            double scale = Math.min((double) maximumWidth / minimumWidth,
-                    (double) maximumHeight / minimumHeight);
-            minimumWidth = Math.max(280, (int) Math.round(minimumWidth * scale));
-            minimumHeight = Math.max(200, (int) Math.round(minimumHeight * scale));
+            return fitWindowSize(width, height, maximumWidth, maximumHeight);
         }
         return new Dimension(minimumWidth, minimumHeight);
-    }
-
-    private Dimension frameSizeForVideo(Dimension videoSize) {
-        return new Dimension(videoSize.width + chromeWidth(), videoSize.height + chromeHeight());
-    }
-
-    private int chromeWidth() {
-        int measured = getWidth() - player.getWidth();
-        return measured > 0 ? measured : getInsets().left + getInsets().right;
-    }
-
-    private int chromeHeight() {
-        int measured = getHeight() - player.getHeight();
-        return measured > 0
-                ? measured
-                : getInsets().top + getInsets().bottom + titleControls.getPreferredSize().height;
     }
 
     private static JToggleButton toggleButton(String icon, int size) {
