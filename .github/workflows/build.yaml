@@ -108,7 +108,7 @@ jobs:
             Write-Host "::error title=Installer smoke test failed::Installer exit code $($install.ExitCode)"
             throw "Installer smoke test failed with exit code $($install.ExitCode)"
           }
-          $versionMatch = Select-String -Path '.\build.gradle' -Pattern "version = '([^']+)'"
+          $versionMatch = Select-String -Path '.\build.gradle' -Pattern "^\s*version\s*=\s*'([^']+)'\s*$"
           $expectedVersion = $versionMatch.Matches[0].Groups[1].Value
           $expectedDisplayName = "AirPlay Receiver $expectedVersion"
           $uninstallRoots = @(
