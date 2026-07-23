@@ -1,5 +1,6 @@
 package com.github.serezhka.airplay.app.ui;
 
+import com.github.serezhka.airplay.app.AppIcons;
 import com.github.serezhka.airplay.app.i18n.I18n;
 import com.github.serezhka.airplay.server.ServerState;
 import lombok.extern.slf4j.Slf4j;
@@ -35,7 +36,6 @@ import java.awt.event.MouseEvent;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import java.awt.geom.RoundRectangle2D;
-import java.awt.image.BufferedImage;
 
 @Slf4j
 final class TrayController implements AutoCloseable {
@@ -56,7 +56,7 @@ final class TrayController implements AutoCloseable {
         }
 
         popupWindow = buildPopupWindow();
-        TrayIcon createdIcon = new TrayIcon(createIcon(), "AirPlay Receiver");
+        TrayIcon createdIcon = new TrayIcon(AppIcons.trayIcon(), "AirPlay Receiver");
         createdIcon.setImageAutoSize(true);
         createdIcon.addActionListener(event -> frame.restoreAndShow());
         createdIcon.addMouseListener(new MouseAdapter() {
@@ -216,22 +216,6 @@ final class TrayController implements AutoCloseable {
         return new Rectangle(bounds.x + insets.left, bounds.y + insets.top,
                 bounds.width - insets.left - insets.right,
                 bounds.height - insets.top - insets.bottom);
-    }
-
-    private BufferedImage createIcon() {
-        BufferedImage image = new BufferedImage(32, 32, BufferedImage.TYPE_INT_ARGB);
-        Graphics2D graphics = image.createGraphics();
-        graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-        graphics.setColor(new Color(83, 109, 254));
-        graphics.fillRoundRect(2, 3, 28, 21, 6, 6);
-        graphics.setColor(Color.WHITE);
-        graphics.drawArc(7, 11, 17, 17, 35, 110);
-        graphics.drawArc(10, 16, 11, 11, 35, 110);
-        graphics.fillOval(14, 24, 3, 3);
-        graphics.setColor(new Color(83, 109, 254));
-        graphics.fillRoundRect(11, 27, 10, 2, 2, 2);
-        graphics.dispose();
-        return image;
     }
 
     private static final class TrayMenuPanel extends JPanel {

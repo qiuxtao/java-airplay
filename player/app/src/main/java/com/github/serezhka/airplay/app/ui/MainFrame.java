@@ -2,6 +2,7 @@ package com.github.serezhka.airplay.app.ui;
 
 import com.formdev.flatlaf.extras.FlatSVGIcon;
 import com.formdev.flatlaf.FlatLaf;
+import com.github.serezhka.airplay.app.AppIcons;
 import com.github.serezhka.airplay.app.AppPaths;
 import com.github.serezhka.airplay.app.AppVersion;
 import com.github.serezhka.airplay.app.ReceiverController;
@@ -77,6 +78,7 @@ public final class MainFrame extends JFrame implements ReceiverView {
         this.i18n = i18n;
         this.settings = controller.settings();
         this.playbackWindow = new PlaybackWindow(controller, i18n);
+        setIconImages(AppIcons.windowIcons());
         setDefaultCloseOperation(DO_NOTHING_ON_CLOSE);
         setMinimumSize(new Dimension(900, 620));
         setSize(1040, 720);
@@ -199,7 +201,7 @@ public final class MainFrame extends JFrame implements ReceiverView {
         appBar.setLayout(new BorderLayout());
         appBar.setBorder(BorderFactory.createEmptyBorder(15, 28, 15, 22));
 
-        JLabel product = new JLabel("  AirPlay Receiver", new FlatSVGIcon("icons/app.svg", 32, 32),
+        JLabel product = new JLabel("  AirPlay Receiver", AppIcons.icon(32),
                 SwingConstants.LEFT);
         product.setFont(product.getFont().deriveFont(Font.BOLD, 17f));
         JPanel identity = new JPanel(new FlowLayout(FlowLayout.LEFT, 9, 0));
@@ -268,7 +270,7 @@ public final class MainFrame extends JFrame implements ReceiverView {
     private JPanel buildHero() {
         JPanel hero = cardPanel(new BorderLayout(26, 0));
         hero.setBorder(BorderFactory.createEmptyBorder(28, 34, 28, 34));
-        JLabel illustration = new JLabel(new FlatSVGIcon("icons/cast.svg", 92, 92));
+        JLabel illustration = new JLabel(AppIcons.icon(92));
         hero.add(illustration, BorderLayout.WEST);
 
         JPanel copy = transparentColumn();

@@ -2,6 +2,7 @@ package com.github.serezhka.airplay.app.ui;
 
 import com.formdev.flatlaf.FlatClientProperties;
 import com.formdev.flatlaf.extras.FlatSVGIcon;
+import com.github.serezhka.airplay.app.AppIcons;
 import com.github.serezhka.airplay.app.ReceiverController;
 import com.github.serezhka.airplay.app.i18n.I18n;
 import com.github.serezhka.airplay.app.platform.WindowsAspectRatioWindowResizer;
@@ -43,7 +44,7 @@ final class PlaybackWindow extends JFrame {
     private final I18n i18n;
     private final JPanel player = new JPanel(new BorderLayout());
     private final JMenuBar titleControls = new JMenuBar();
-    private final JLabel sessionLabel = new JLabel(new FlatSVGIcon("icons/app.svg", 20, 20));
+    private final JLabel sessionLabel = new JLabel(AppIcons.icon(20));
     private final JLabel formatLabel = new JLabel("—");
     private final JToggleButton muteButton = toggleButton("icons/volume.svg", 17);
     private final JToggleButton alwaysOnTopButton = toggleButton("icons/pin.svg", 17);
@@ -62,6 +63,7 @@ final class PlaybackWindow extends JFrame {
         this.controller = controller;
         this.i18n = i18n;
         this.volume = new JSlider(0, 100, (int) Math.round(controller.settings().volume() * 100));
+        setIconImages(AppIcons.windowIcons());
         setDefaultCloseOperation(DO_NOTHING_ON_CLOSE);
         setMinimumSize(FALLBACK_MINIMUM_SIZE);
         setSize(980, 640);

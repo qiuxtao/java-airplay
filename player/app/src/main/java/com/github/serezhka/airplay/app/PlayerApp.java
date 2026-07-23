@@ -37,6 +37,7 @@ public final class PlayerApp {
         try {
             ReceiverController controller = new ReceiverController(settingsStore, settings, themeManager);
             SwingUtilities.invokeLater(() -> {
+                AppIcons.installTaskbarIcon();
                 MainFrame frame = new MainFrame(controller, i18n);
                 controller.attachView(frame);
                 frame.setVisible(true);

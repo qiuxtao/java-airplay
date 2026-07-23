@@ -36,6 +36,7 @@ def packageStagedImage = layout.buildDirectory.dir('package/staged-image')
 def packageInstaller = layout.buildDirectory.dir('package/installer')
 def windowsUpgradeUuid = 'd5576768-02f3-4541-bc01-d700c679b5b2'
 def windowsResources = layout.projectDirectory.dir('src/jpackage/windows')
+def windowsIcon = layout.projectDirectory.file('src/jpackage/windows/AirPlay Receiver.ico')
 def isWindows = System.getProperty('os.name').toLowerCase(Locale.ROOT).contains('windows')
 
 // The upstream Windows runtime also contains headers, static/import libraries,
@@ -121,6 +122,7 @@ tasks.register('packageAppImage', Exec) {
     inputs.dir packageInput
     inputs.property 'appVersion', project.version.toString()
     inputs.property 'mainClass', application.mainClass
+    inputs.file windowsIcon
     outputs.dir packageImage
     doFirst {
         delete packageImage
@@ -137,6 +139,7 @@ tasks.register('packageAppImage', Exec) {
                 '--app-version', project.version.toString(),
                 '--vendor', 'java-airplay',
                 '--description', 'Receive AirPlay screen mirroring and audio on Windows',
+                '--icon', windowsIcon.asFile,
                 '--java-options', '-Xms32m',
                 '--java-options', '-Xmx512m',
                 '--java-options', '-XX:MaxDirectMemorySize=256m',
@@ -206,6 +209,7 @@ tasks.register('packageWindows', Exec) {
                 '--app-image', packageStagedImage.get().dir('AirPlay Receiver').asFile,
                 '--app-version', project.version.toString(),
                 '--vendor', 'java-airplay',
+                '--icon', windowsIcon.asFile,
                 '--win-per-user-install',
                 '--win-upgrade-uuid', windowsUpgradeUuid,
                 '--resource-dir', windowsResources.asFile,
